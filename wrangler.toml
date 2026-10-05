@@ -1,0 +1,25 @@
+name = "lofi-reconciliation"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+# Fetch new payouts every morning, 6:00 Sydney (20:00 UTC in AEDT, 19:00 in AEST).
+[triggers]
+crons = ["0 20 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lofi-recon"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"   # wrangler d1 create lofi-recon
+
+[vars]
+SHOPIFY_SHOP = "REPLACE.myshopify.com"
+SHOPIFY_API_VERSION = "2025-10"
+EBAY_MARKETPLACE_ID = "EBAY_AU"
+# Days of payouts to look back on each run.
+LOOKBACK_DAYS = "14"
+
+# Secrets (set with `wrangler secret put <NAME>`):
+#   SHOPIFY_ADMIN_TOKEN   custom app token: read_orders, read_shopify_payments_payouts (read_shopify_payments)
+#   EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_REFRESH_TOKEN
+#                         scopes: sell.finances, sell.fulfillment.readonly
+#   DASHBOARD_TOKEN       shared secret for the dashboard (or put the Worker behind Cloudflare Access)
