@@ -291,3 +291,26 @@ describe("Shopify authentication", () => {
     expect(() => new ShopifyClient({ shop: "x.myshopify.com", apiVersion: "2026-10" })).toThrow(/SHOPIFY_CLIENT_ID/);
   });
 });
+
+describe("fetch is never called as a method (Cloudflare 'Illegal invocation')", () => {
+  // workerd throws if fetch's `this` is anything but undefined/globalThis.
+  function strictFetch(this: unknown, url: string) {
+    if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+    if (String(url).includes("/identity/v1/oauth2/token")) return Promise.resolve(Response.json({ access_token: "t", expires_in: 7200 }));
+    if (String(url).includes("/oauth/access_token")) return Promise.resolve(Response.json({ access_token: "t", expires_in: 86399 }));
+    if (String(url).includes("/payout?")) return Promise.resolve(Response.json({ payouts: [] }));
+    return Promise.resolve(Response.json({ data: { ok: true } }));
+  }
+
+  it("eBay client", async () => {
+    const { EbayClient } = await import("../src/channels/ebay");
+    const c = new EbayClient({ clientId: "a", clientSecret: "b", refreshToken: "r", marketplaceId: "EBAY_AU", fetch: strictFetch as unknown as typeof fetch });
+    await expect(c.listPayouts("2026-10-01")).resolves.toEqual([]);
+  });
+
+  it("Shopify client", async () => {
+    const { ShopifyClient } = await import("../src/channels/shopify");
+    const c = new ShopifyClient({ shop: "x.myshopify.com", clientId: "a", clientSecret: "b", apiVersion: "2026-10", fetch: strictFetch as unknown as typeof fetch });
+    await expect(c.gql("{ shop { name } }", {})).resolves.toEqual({ ok: true });
+  });
+});

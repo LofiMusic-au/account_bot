@@ -104,8 +104,13 @@ export class EbayClient {
   private token: { value: string; expires: number } | null = null;
   constructor(private cfg: EbayConfig) {}
 
-  private get f() {
-    return this.cfg.fetch ?? fetch;
+  /**
+   * Call fetch unbound. Cloudflare's runtime throws "Illegal invocation" if
+   * fetch is called as a method of another object (e.g. this.f(...)).
+   */
+  private f(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const doFetch = this.cfg.fetch ?? fetch;
+    return doFetch(input, init);
   }
 
   private async accessToken(): Promise<string> {
