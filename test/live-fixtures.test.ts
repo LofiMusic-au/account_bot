@@ -103,6 +103,37 @@ describe("live eBay payout shapes", () => {
   });
 });
 
+describe("live eBay order details (Fulfillment API)", () => {
+  it("every AUD sale matches its order; foreign orders match in their own currency and split the AUD gross", () => {
+    for (const name of NAMES) {
+      const p = live(name);
+      expect(p.issues.filter((i) => i.code === "sale_amount_mismatch" || i.code === "order_details_missing")).toEqual([]);
+      for (const s of p.sales) {
+        expect(s.lines.reduce((a, l) => a + l.grossCents, 0) + s.shippingCents).toBe(s.grossCents);
+      }
+    }
+    const fx = live("ebay-foreign-currency");
+    expect(fx.warnings.filter((w) => /order priced in (EUR|USD)/.test(w))).toHaveLength(2);
+    const eur = fx.sales.find((s) => s.buyerCurrency === "EUR")!;
+    expect(eur.destinationCountry).toBe("DE");
+    expect(eur.shippingProgram).toBe("direct_export");
+    expect(eur.grossCents).toBe(6254);
+  });
+
+  it("a partial refund is matched to its original order and reverses its lines", () => {
+    const p = live("ebay-refund-fee-credit");
+    expect(p.refunds[0]!.order).not.toBeNull();
+    const r = buildReport(p, () => null);
+    expect(r.issues.some((i) => i.code === "refund_unmatched")).toBe(false);
+    expect(r.refunds.reduce((a, l) => a + l.grossCents, 0)).toBe(-2590);
+  });
+
+  it("a listing without a SKU on eBay is flagged, not guessed", () => {
+    const r = buildReport(live("ebay-foreign-currency"), () => null);
+    expect(r.issues.filter((i) => i.code === "unknown_sku")).toHaveLength(1);
+  });
+});
+
 describe("live Shopify Payments payout shape", () => {
   it("charges and a refund reconcile to the cent; net = amount - fee; held for review without order access", () => {
     const f = loadFixture<{ payout: ShopifyPayout; transactions: ShopifyBalanceTxn[] }>("live/shopify-charges-refund.json");

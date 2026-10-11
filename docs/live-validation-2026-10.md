@@ -6,7 +6,13 @@ Real payout, transaction and order IDs are left out of this file because the rep
 
 ## eBay
 
-**Credentials used:** an existing LOFI eBay user access token. It works for the Finances API, but the Fulfillment API rejects it with eBay error 1004, "Error processing the access token". So no order details (SKUs, destinations, line prices) could be read. Every sale is held as `order_details_missing`, and nothing is classified or guessed.
+**Credentials used:** at first, an existing LOFI eBay user access token. It worked for the Finances API, but the Fulfillment API rejected it with eBay error 1004. Then a refresh token from `npm run ebay:consent` was used, with `sell.finances` and `sell.fulfillment.readonly`, and both APIs worked.
+
+**With order details** (re-run on all five payouts):
+- **18 of 20 sales** match their Fulfillment order exactly: line prices after discounts plus shipping equal net + fees.
+- **The two foreign-buyer sales** match in the order's own currency. EUR 39.99 equals the fee basis, and so does USD 69.46.
+- **All refunds** are matched to their original orders.
+- **The only remaining blockers** are SKUs with no stock record (no stock facts are loaded yet), plus one German listing that has no SKU on eBay.
 
 | Payout date | Contents | Actual payout | Reconstructed | Difference |
 |---|---|---|---|---|
@@ -43,7 +49,8 @@ A 30-day scan found these types only: `SALE`, `REFUND`, and `NON_SALE_CHARGE` wi
    - A fee in another currency, or a missing rate, blocks the payout.
    - This is a working method only. It raises an `fx_policy_pending` sign-off issue until the accountant approves LOFI's FX policy (C4).
 3. **Collected tax uses a different spelling.** The live field is `ebayCollectedTaxAmount`. The code read `eBayCollectedTaxAmount`, so it never saw it. Both are read now. eBay collects and remits that tax (EUR 7.60 of EU VAT on one sale), and it is outside LOFI's gross and fee basis.
-4. **Order-fetch errors were swallowed.**
+4. **Foreign-buyer orders are priced in the buyer's currency.** The Fulfillment order for a EUR or USD sale has `lineItemCost`, `deliveryCost` and `pricingSummary` in EUR or USD, and they match the fee basis. The comparison is now made in that currency. eBay's AUD gross is then split across items and shipping in proportion, recorded in the payout notes. A mismatch in the order's currency still blocks.
+5. **Order-fetch errors were swallowed.**
    - What the code did: a failed `getOrder` became "order details not found". It was also retried four times, even for an OAuth error.
    - Now: the real error is carried into the issue, and OAuth-domain errors aren't retried.
 
@@ -62,11 +69,9 @@ These are masked copies of live shapes in `test/fixtures/live/`. IDs are replace
 
 ### Still to validate on eBay
 
-- **Order details:** this needs a user token with `sell.fulfillment.readonly`, from LOFI's eBay developer app through the OAuth consent flow. Until then nothing can be compared with the Fulfillment order:
-  - SKUs, line prices and shipping split
-  - discounts
-  - destination and eBay International Shipping detection
-- **Refunds against earlier orders:** these need that order fetch to reverse with the original scenario.
+- **eBay International Shipping:** no EIS order appeared in 30 days. Detection (`program.ebayInternationalShipping` or `ebaySupportedFulfillment`) is still unverified on live data.
+- **Collected tax on exports:** eBay reported collecting AUD 18.90 of tax on a $126.00 sale. That's 15%, consistent with NZ GST on a low-value import. It's noted as outside LOFI's gross, and the export classification still needs stock facts.
+- **Classification:** stock facts and SKU prefix meanings must be loaded before any sale can be classified.
 
 ## Shopify Payments
 

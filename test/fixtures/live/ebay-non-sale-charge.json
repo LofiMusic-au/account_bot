@@ -73,5 +73,55 @@
    "paymentsEntity": "eBay Commerce Australia Pty Ltd"
   }
  ],
- "orders": []
+ "orders": [
+  {
+   "orderId": "LIVE-ORDER-1",
+   "creationDate": "2026-10-01T12:03:56.000Z",
+   "salesRecordReference": null,
+   "pricingSummary": {
+    "priceSubtotal": {
+     "value": "639.0",
+     "currency": "AUD"
+    },
+    "deliveryCost": {
+     "value": "0.0",
+     "currency": "AUD"
+    },
+    "total": {
+     "value": "639.0",
+     "currency": "AUD"
+    }
+   },
+   "lineItems": [
+    {
+     "lineItemId": "LIVE-LINE-1",
+     "sku": "MicroX-002713-040626",
+     "title": "Korg Micro X Digital Polyphonic Compact Portable Synthesiser & Controller",
+     "quantity": 1,
+     "lineItemCost": {
+      "value": "639.0",
+      "currency": "AUD"
+     },
+     "deliveryCost": {
+      "shippingCost": {
+       "value": "0.0",
+       "currency": "AUD"
+      }
+     }
+    }
+   ],
+   "fulfillmentStartInstructions": [
+    {
+     "ebaySupportedFulfillment": false,
+     "shippingStep": {
+      "shipTo": {
+       "contactAddress": {
+        "countryCode": "AU"
+       }
+      }
+     }
+    }
+   ]
+  }
+ ]
 }

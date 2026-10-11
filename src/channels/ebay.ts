@@ -9,7 +9,7 @@
 // relying on the numbers; mismatches show up as warnings and an unbalanced
 // payout, never as silent errors.
 
-import { convertAtRate, toCents } from "../money";
+import { convertAtRate, fmt, toCents } from "../money";
 import { rescaleOrder } from "../rules/engine";
 import type { Adjustment, Fee, FeeCategory, Issue, NormalisedPayout, OrderSale, RawTransaction, Refund, SourceRef } from "../types";
 
@@ -73,7 +73,7 @@ export interface EbayTransaction {
 
 export interface EbayOrder {
   orderId: string;
-  pricingSummary?: { total?: Amount };
+  pricingSummary?: { total?: Amount; priceSubtotal?: Amount; deliveryCost?: Amount; priceDiscount?: Amount };
   creationDate: string;
   salesRecordReference?: string;
   lineItems: {
@@ -231,26 +231,34 @@ function stripBuyer(t: EbayTransaction): unknown {
   return rest;
 }
 
-/** The eBay order fields kept for audit: amounts, SKUs and destination country only. */
-export function ebayOrderForAudit(o: EbayOrder): unknown {
-  const fsi = o.fulfillmentStartInstructions?.[0];
+/**
+ * The eBay order fields kept for audit: amounts, SKUs and destination country
+ * only. The shape is kept parseable by ebayOrderToSale (fixtures and stored
+ * copies normalise the same as live), with names and street addresses dropped.
+ */
+export function ebayOrderForAudit(o: EbayOrder): EbayOrder {
   return {
     orderId: o.orderId,
     creationDate: o.creationDate,
-    salesRecordReference: o.salesRecordReference ?? null,
-    pricingSummary: o.pricingSummary ?? null,
-    program: o.program ?? null,
+    salesRecordReference: o.salesRecordReference,
+    pricingSummary: o.pricingSummary,
+    program: o.program,
     lineItems: o.lineItems.map((li) => ({
       lineItemId: li.lineItemId,
-      sku: li.sku ?? null,
+      sku: li.sku,
       title: li.title,
       quantity: li.quantity,
       lineItemCost: li.lineItemCost,
-      discountedLineItemCost: li.discountedLineItemCost ?? null,
-      deliveryCost: li.deliveryCost ?? null,
+      discountedLineItemCost: li.discountedLineItemCost,
+      deliveryCost: li.deliveryCost,
     })),
-    destinationCountry: fsi?.finalDestinationAddress?.countryCode ?? fsi?.shippingStep?.shipTo?.contactAddress?.countryCode ?? null,
-    ebaySupportedFulfillment: fsi?.ebaySupportedFulfillment ?? null,
+    fulfillmentStartInstructions: o.fulfillmentStartInstructions?.map((f) => ({
+      ebaySupportedFulfillment: f.ebaySupportedFulfillment,
+      finalDestinationAddress: f.finalDestinationAddress?.countryCode ? { countryCode: f.finalDestinationAddress.countryCode } : undefined,
+      shippingStep: f.shippingStep?.shipTo?.contactAddress?.countryCode
+        ? { shipTo: { contactAddress: { countryCode: f.shippingStep.shipTo.contactAddress.countryCode } } }
+        : undefined,
+    })),
   };
 }
 
@@ -275,9 +283,8 @@ export function ebayOrderToSale(o: EbayOrder, warnings: string[], sources: Sourc
   const dest = destRaw ? destRaw.toUpperCase() : null;
   const eis = !!o.program?.ebayInternationalShipping || (fsi?.ebaySupportedFulfillment === true && dest !== null && dest !== "AU");
   const buyerCurrency = o.lineItems[0]?.lineItemCost.convertedFromCurrency ?? null;
-  if (o.lineItems.some((li) => li.lineItemCost.currency !== "AUD")) {
-    warnings.push(`eBay order ${o.orderId}: amounts not in AUD`);
-  }
+  const currencies = new Set(o.lineItems.flatMap((li) => [li.lineItemCost.currency, li.deliveryCost?.shippingCost?.currency].filter(Boolean)));
+  if (currencies.size > 1) warnings.push(`eBay order ${o.orderId}: mixed currencies on one order (${[...currencies].join(", ")})`);
   return {
     orderId: o.orderId,
     orderName: o.salesRecordReference ? `eBay ${o.orderId} (#${o.salesRecordReference})` : `eBay ${o.orderId}`,
@@ -479,9 +486,31 @@ export function normaliseEbayPayout(
           });
           break;
         }
-        let sale = ebayOrderToSale(o, warnings, [src]);
+        let sale = ebayOrderToSale(o, [], [src]);
         if (fx.rate && !sale.buyerCurrency) sale = { ...sale, buyerCurrency: fx.currency };
-        if (sale.grossCents !== gross) {
+        // Live data: a foreign buyer's order (Fulfillment API) is priced in the
+        // buyer's currency, matching the fee basis. Compare in that currency,
+        // then split eBay's AUD gross across items and shipping in proportion.
+        const orderCurrency = o.lineItems[0]?.lineItemCost.currency ?? "AUD";
+        if (orderCurrency !== "AUD") {
+          const grossInOrderCurrency =
+            fx.rate && orderCurrency === fx.currency ? toCents(t.amount.convertedFromValue) + toCents(t.totalFeeAmount?.value) : null;
+          if (grossInOrderCurrency === sale.grossCents) {
+            warnings.push(
+              `${sale.orderName}: order priced in ${orderCurrency} ${fmt(sale.grossCents).replace("$", "")}; AUD ${fmt(gross)} split across items and shipping in proportion`,
+            );
+            sale = rescaleOrder(sale, gross);
+          } else {
+            issues.push({
+              code: "sale_amount_mismatch",
+              severity: "blocking",
+              message: `${sale.orderName}: order total ${sale.grossCents} ${orderCurrency} cents doesn't match the sale (${grossInOrderCurrency ?? "no conversion"} in that currency)`,
+              orderId,
+              transactionId: t.transactionId,
+            });
+            sale = rescaleOrder(sale, gross);
+          }
+        } else if (sale.grossCents !== gross) {
           issues.push({
             code: "sale_amount_mismatch",
             severity: "blocking",

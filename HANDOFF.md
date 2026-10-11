@@ -158,7 +158,7 @@ Live-validated on five payouts in October 2026. All reconciled to $0.00. Full de
   - On foreign-currency sales, fees and the fee basis are in the buyer's currency. They are converted at the transaction's `exchangeRate`, and the C4 FX policy is still pending.
   - The tax field is spelled `ebayCollectedTaxAmount` in the live API.
   - `getOrder` errors are now surfaced instead of swallowed.
-- **Blocked:** the available token can't use the Fulfillment API. Until a token with `sell.fulfillment.readonly` exists, the following can't be checked: SKUs, destination, eBay International Shipping detection, line prices and discounts.
+- **Order details:** now read through the refresh token from `npm run ebay:consent`. On the five payouts, every sale and refund matches its order. Foreign-buyer orders are priced in the buyer's currency, so they're compared in that currency and the AUD gross is split in proportion.
 - **Transaction types seen in 30 days:** SALE, REFUND, and NON_SALE_CHARGE (`OTHER_FEES`, probably the store subscription, not assumed).
 
 ---

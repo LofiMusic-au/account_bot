@@ -240,11 +240,15 @@ async function ebay() {
           referenceId: m("REF", r.referenceId)!,
         })),
       })),
-      orders: [...raw.orders.values()].map((o: EbayOrder) => ({
-        ...(ebayOrderForAudit(o) as object),
-        orderId: m("ORDER", o.orderId),
-        salesRecordReference: null,
-      })),
+      orders: [...raw.orders.values()].map((o: EbayOrder) => {
+        const a = ebayOrderForAudit(o);
+        return {
+          ...a,
+          orderId: m("ORDER", o.orderId),
+          salesRecordReference: null,
+          lineItems: a.lineItems.map((li) => ({ ...li, lineItemId: m("LINE", li.lineItemId) })),
+        };
+      }),
     };
     const dir = join(root, "test", "fixtures", "live");
     mkdirSync(dir, { recursive: true });
