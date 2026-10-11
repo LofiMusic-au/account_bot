@@ -210,9 +210,11 @@ export default {
     const msg = url.searchParams.get("msg") ?? undefined;
 
     const canReset = env.ALLOW_DATA_RESET === "true";
+    const qc = url.searchParams.get("channel");
+    const channelFilter: Channel | undefined = qc === "ebay" || qc === "shopify" ? qc : undefined;
 
     if (req.method === "GET" && path === "/") {
-      return renderIndex(await listReports(env.DB), msg, canReset);
+      return renderIndex(await listReports(env.DB, 60, channelFilter), msg, canReset, channelFilter);
     }
 
     if (req.method === "POST" && path === "/admin/clear-payouts") {
@@ -247,7 +249,7 @@ export default {
     }
 
     if (req.method === "GET" && path === "/review") {
-      const rows = await listReports(env.DB, 60);
+      const rows = await listReports(env.DB, 60, channelFilter);
       const items: ReviewItem[] = [];
       const consignors = new Map((await consignorList(env)).map((c) => [c.id, c.name]));
       for (const row of rows.filter((x) => x.status !== "ready")) {
@@ -255,7 +257,7 @@ export default {
         if (!r || !r.issues) continue;
         for (const issue of r.issues) if (issue.severity === "blocking") items.push({ report: r, issue });
       }
-      return renderReview(items, consignors, msg, canReset);
+      return renderReview(items, consignors, msg, canReset, channelFilter);
     }
 
     // One fact at a time, from the review queue. Facts, never tax codes.

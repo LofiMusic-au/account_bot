@@ -3,7 +3,7 @@
 import { fmt } from "./money";
 import { FEE_CATEGORIES, REPORT_VERSION, saleScenarioCounts, type PayoutReport } from "./reconcile";
 import type { ReportSummary, SourceInfo } from "./db";
-import type { FeeCategory, Issue, LineClassification, SourceRef } from "./types";
+import type { Channel, FeeCategory, Issue, LineClassification, SourceRef } from "./types";
 
 const esc = (s: unknown) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -96,18 +96,28 @@ const payoutLink = (channel: string, id: string) => `/payout/${esc(channel)}/${e
 const statusChips = (status: string, provisional: boolean) =>
   chip(status, STATUS_LABEL[status] ?? status) + (provisional ? chip("provisional", "Provisional") : "");
 const message = (m?: string) => (m ? `<div class="note">${esc(m)}</div>` : "");
+/** All / eBay / Shopify toggle for a page. */
+const channelToggle = (base: string, current?: Channel) => {
+  const opt = (c: Channel | undefined, label: string) =>
+    c === current
+      ? `<span class="chip ready" aria-current="true">${label}</span>`
+      : `<a class="chip" style="color:var(--muted);text-decoration:none" href="${base}${c ? `?channel=${c}` : ""}">${label}</a>`;
+  return `<div style="margin:8px 0" role="group" aria-label="Filter by platform">${opt(undefined, "All")} ${opt("ebay", "eBay")} ${opt("shopify", "Shopify")}</div>`;
+};
+
 const clearButton = (canReset: boolean) =>
   canReset
     ? `<form method="post" action="/admin/clear-payouts" style="display:inline" onsubmit="return confirm('Delete every payout and its stored source data? Stock records, consignors and facts are kept. You can fetch payouts again afterwards.')"><button class="alt">Clear all payouts</button></form>`
     : "";
 
-export function renderIndex(rows: ReportSummary[], msg?: string, canReset = false): Response {
+export function renderIndex(rows: ReportSummary[], msg?: string, canReset = false, channel?: Channel): Response {
   const body = `
 <h1>Payouts</h1>
 <p class="muted">Each payout is rebuilt into its sales, fees, refunds and adjustments, GST is worked out per LOFI's draft scenarios, and the total is checked against the actual payout to the cent.
 <b>Provisional</b> means at least one treatment used isn't signed off by the accountant yet.</p>
 ${message(msg)}
 <div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap"><form method="post" action="/run" style="display:inline"><button>Fetch new payouts now</button></form>${clearButton(canReset)}</div>
+${channelToggle("/", channel)}
 <div class="wrap"><table>
 <tr><th>Date</th><th>Channel</th><th>Payout</th><th class="n">Actual payout</th><th class="n">Reconstructed</th><th class="n">Difference</th><th class="n">Sales</th><th>Scenarios</th><th>Status</th></tr>
 ${rows
@@ -127,7 +137,7 @@ ${rows
 <td>${statusChips(r.status, r.provisional === 1)}${r.blocking_count ? ` <span class="muted small">${r.blocking_count} to fix</span>` : ""}</td></tr>`;
   })
   .join("")}
-${rows.length === 0 ? `<tr><td colspan="9" class="muted">No payouts yet. Press "Fetch new payouts now".</td></tr>` : ""}
+${rows.length === 0 ? `<tr><td colspan="9" class="muted">${channel ? `No ${channelName(channel)} payouts yet.` : `No payouts yet. Press "Fetch new payouts now".`}</td></tr>` : ""}
 </table></div>`;
   return page("Payouts", body);
 }
@@ -304,7 +314,8 @@ export interface ReviewItem {
   issue: Issue;
 }
 
-export function renderReview(items: ReviewItem[], consignors: Map<number, string>, msg?: string, canReset = false): Response {
+export function renderReview(items: ReviewItem[], consignors: Map<number, string>, msg?: string, canReset = false, channel?: Channel): Response {
+  const back = channel ? `/review?channel=${channel}` : "/review";
   // One row per distinct problem: the same unknown SKU in three payouts is one fix.
   const groups = new Map<string, { issue: Issue; title: string | null; reports: PayoutReport[] }>();
   for (const { report: r, issue: i } of items) {
@@ -320,6 +331,7 @@ export function renderReview(items: ReviewItem[], consignors: Map<number, string
 Treatments awaiting the accountant aren't listed here; they show as <b>Provisional</b> on each payout.</p>
 ${message(msg)}
 ${canReset ? `<p>${clearButton(true)}</p>` : ""}
+${channelToggle("/review", channel)}
 <div class="wrap"><table><tr><th>Problem</th><th>Detail</th><th>Payouts</th><th>Fix</th></tr>
 ${rows
   .map(({ issue: i, title, reports }) => {
@@ -327,10 +339,10 @@ ${rows
     return `<tr><td><b>${esc(ISSUE_LABEL[i.code] ?? i.code)}</b>${i.sku && i.code !== "unknown_destination" ? `<div><code>${esc(i.sku)}</code></div>` : ""}</td>
 <td>${i.code === "unknown_destination" ? `Order ${esc(first.sales.find((l) => l.orderId === i.orderId)?.orderName ?? i.orderId)}<br>` : title ? `${esc(title)}<br>` : ""}<span class="muted small">${esc(i.message)}</span></td>
 <td class="small">${reports.map((r) => `<a href="${payoutLink(r.channel, r.payoutId)}">${channelName(r.channel)} ${esc(r.payoutDate)}</a>`).join("<br>")}</td>
-<td>${fixFor(i, first.channel, title, "/review", i.consignorId ? consignors.get(i.consignorId) : undefined) || `<a class="small" href="${payoutLink(first.channel, first.payoutId)}">Open payout</a>`}</td></tr>`;
+<td>${fixFor(i, first.channel, title, back, i.consignorId ? consignors.get(i.consignorId) : undefined) || `<a class="small" href="${payoutLink(first.channel, first.payoutId)}">Open payout</a>`}</td></tr>`;
   })
   .join("")}
-${rows.length === 0 ? `<tr><td colspan="4" class="muted">Nothing to review.</td></tr>` : ""}
+${rows.length === 0 ? `<tr><td colspan="4" class="muted">Nothing to review${channel ? ` for ${channelName(channel)}` : ""}.</td></tr>` : ""}
 </table></div>`;
   return page("Review queue", body);
 }

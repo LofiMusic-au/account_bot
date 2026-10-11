@@ -366,15 +366,15 @@ export interface ReportSummary {
   scenario_summary: string | null;
 }
 
-export async function listReports(db: D1Database, limit = 60): Promise<ReportSummary[]> {
+export async function listReports(db: D1Database, limit = 60, channel?: Channel): Promise<ReportSummary[]> {
   return (
     await db
       .prepare(
         `SELECT channel, payout_id, payout_date, net_cents, expected_cents, difference_cents, status, sale_count, review_count,
            gst_cents, provisional, blocking_count, signoff_count, scenario_summary
-         FROM payout_reports ORDER BY payout_date DESC, channel LIMIT ?`,
+         FROM payout_reports ${channel ? "WHERE channel = ?" : ""} ORDER BY payout_date DESC, channel LIMIT ?`,
       )
-      .bind(limit)
+      .bind(...(channel ? [channel, limit] : [limit]))
       .all<ReportSummary>()
   ).results;
 }
