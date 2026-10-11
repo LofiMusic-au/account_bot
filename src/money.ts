@@ -100,3 +100,17 @@ export function allocate(total: number, weights: number[]): number[] {
   }
   return out.map((f) => f * sign || 0);
 }
+
+/**
+ * Convert `cents` at a decimal exchange-rate string (e.g. "1.56408"),
+ * rounding half away from zero. Integer arithmetic only.
+ */
+export function convertAtRate(cents: number, rate: string): number {
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(rate.trim());
+  if (!m) throw new Error(`Not an exchange rate: ${rate}`);
+  const frac = m[2] ?? "";
+  const num = Number(m[1]! + frac);
+  const den = 10 ** frac.length;
+  if (!Number.isSafeInteger(cents * num)) throw new Error(`Conversion out of range: ${cents} x ${rate}`);
+  return divRound(cents * num, den);
+}

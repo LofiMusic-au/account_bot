@@ -1,0 +1,611 @@
+{
+ "_note": "Masked from live eBay payout (2026-09-11). Real IDs replaced; amounts, field shapes and types kept. No buyer data, no bank details.",
+ "payout": {
+  "payoutId": "LIVE-PAYOUT-1",
+  "payoutStatus": "SUCCEEDED",
+  "payoutDate": "2026-09-11T15:04:35.000Z",
+  "amount": {
+   "value": "4303.68",
+   "currency": "AUD"
+  },
+  "transactionCount": 11
+ },
+ "transactions": [
+  {
+   "transactionId": "LIVE-TXN-1",
+   "orderId": "LIVE-ORDER-1",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "105.38",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "117.95",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "12.57",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-1",
+     "feeBasisAmount": {
+      "value": "117.95",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "INTERNATIONAL_FEE",
+       "amount": {
+        "value": "1.18",
+        "currency": "AUD"
+       },
+       "feeMemo": "Charged because the delivery address is in United States. Final amount: AU $117.95."
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "11.09",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-09-10T14:58:58.464Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd"
+  },
+  {
+   "transactionId": "LIVE-TXN-2",
+   "orderId": "LIVE-ORDER-2",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "48.17",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "51.9",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "3.73",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-2",
+     "feeBasisAmount": {
+      "value": "51.9",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "3.43",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-09-10T14:51:15.072Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd"
+  },
+  {
+   "transactionId": "LIVE-TXN-3",
+   "orderId": "LIVE-ORDER-3",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "52.91",
+    "currency": "AUD",
+    "convertedFromCurrency": "EUR",
+    "convertedFromValue": "33.83",
+    "exchangeRate": "1.56408"
+   },
+   "totalFeeBasisAmount": {
+    "value": "39.99",
+    "currency": "EUR"
+   },
+   "totalFeeAmount": {
+    "value": "6.16",
+    "currency": "EUR"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-3",
+     "feeBasisAmount": {
+      "value": "47.59",
+      "currency": "EUR"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "INTERNATIONAL_FEE",
+       "amount": {
+        "value": "0.48",
+        "currency": "EUR"
+       },
+       "feeMemo": "Charged because the delivery address is in Germany. Final amount: EUR 47.59."
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.45",
+        "currency": "EUR"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "5.23",
+        "currency": "EUR"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-09-10T13:03:05.537Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay S.Ã  r.l.",
+   "ebayCollectedTaxAmount": {
+    "value": "7.6",
+    "currency": "EUR"
+   }
+  },
+  {
+   "transactionId": "LIVE-TXN-4",
+   "orderId": "LIVE-ORDER-4",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "513.61",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "579.0",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "65.39",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-4",
+     "feeBasisAmount": {
+      "value": "625.89",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "INTERNATIONAL_FEE",
+       "amount": {
+        "value": "6.26",
+        "currency": "AUD"
+       },
+       "feeMemo": "Charged because the delivery address is in Switzerland. Final amount: AU $625.89."
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "58.83",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-09-10T12:53:22.528Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd",
+   "ebayCollectedTaxAmount": {
+    "value": "46.89",
+    "currency": "AUD"
+   }
+  },
+  {
+   "transactionId": "LIVE-TXN-5",
+   "orderId": "LIVE-ORDER-5",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "549.11",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "619.0",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "69.89",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-5",
+     "feeBasisAmount": {
+      "value": "669.14",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "INTERNATIONAL_FEE",
+       "amount": {
+        "value": "6.69",
+        "currency": "AUD"
+       },
+       "feeMemo": "Charged because the delivery address is in Switzerland. Final amount: AU $669.14."
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "62.9",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-09-10T10:13:54.835Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd",
+   "ebayCollectedTaxAmount": {
+    "value": "50.14",
+    "currency": "AUD"
+   }
+  },
+  {
+   "transactionId": "LIVE-TXN-6",
+   "orderId": "LIVE-ORDER-6",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "31.04",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "34.59",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "3.55",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-6",
+     "feeBasisAmount": {
+      "value": "34.59",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "3.25",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-09-10T04:18:06.761Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd"
+  },
+  {
+   "transactionId": "LIVE-TXN-7",
+   "orderId": "LIVE-ORDER-7",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "111.99",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "125.75",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "13.76",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-7",
+     "feeBasisAmount": {
+      "value": "87.85",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "9.4",
+        "currency": "AUD"
+       }
+      }
+     ]
+    },
+    {
+     "lineItemId": "LIVE-LINE-8",
+     "feeBasisAmount": {
+      "value": "37.9",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "4.06",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-09-10T03:55:49.628Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd"
+  },
+  {
+   "transactionId": "LIVE-TXN-8",
+   "orderId": "LIVE-ORDER-8",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "475.3",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "524.95",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "49.65",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-9",
+     "feeBasisAmount": {
+      "value": "524.95",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "49.35",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-09-10T03:35:28.268Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd"
+  },
+  {
+   "transactionId": "LIVE-TXN-9",
+   "orderId": "LIVE-ORDER-9",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "163.64",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "180.95",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "17.31",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-10",
+     "feeBasisAmount": {
+      "value": "180.95",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "17.01",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-09-10T01:37:06.187Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd"
+  },
+  {
+   "transactionId": "LIVE-TXN-10",
+   "orderId": "LIVE-ORDER-10",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "2170.32",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "2324.0",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "153.68",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-11",
+     "feeBasisAmount": {
+      "value": "2324.0",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "153.38",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-09-10T01:34:55.473Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd"
+  },
+  {
+   "transactionId": "LIVE-TXN-11",
+   "orderId": "LIVE-ORDER-11",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "82.21",
+    "currency": "AUD",
+    "convertedFromCurrency": "USD",
+    "convertedFromValue": "61.22",
+    "exchangeRate": "1.34292"
+   },
+   "totalFeeBasisAmount": {
+    "value": "69.46",
+    "currency": "USD"
+   },
+   "totalFeeAmount": {
+    "value": "8.24",
+    "currency": "USD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-12",
+     "feeBasisAmount": {
+      "value": "75.71",
+      "currency": "USD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "7.08",
+        "currency": "USD"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.4",
+        "currency": "USD"
+       }
+      },
+      {
+       "feeType": "INTERNATIONAL_FEE",
+       "amount": {
+        "value": "0.76",
+        "currency": "USD"
+       },
+       "feeMemo": "Charged because the delivery address is in United States. Final amount: US $75.71."
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-09-09T21:39:25.523Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Inc.",
+   "ebayCollectedTaxAmount": {
+    "value": "6.25",
+    "currency": "USD"
+   }
+  }
+ ],
+ "orders": []
+}

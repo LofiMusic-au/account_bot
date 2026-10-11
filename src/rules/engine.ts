@@ -368,6 +368,11 @@ function consignorAgreementFacts(c: Consignor, why: string[]): Pick | null {
 
 /** Classify one sale line (never shipping; see classifyShipping). */
 export function classifyLine(order: OrderSale, line: SaleLine, item: StockItem | null): LineClassification {
+  if (line.placeholder) {
+    // The order-level "order details missing" issue already explains this line.
+    const r = review(order, line, "order_details_missing", "Order details unavailable: items can't be classified", ["order details = unavailable"]);
+    return { ...r, issues: [] };
+  }
   if (!line.sku) return review(order, line, "unknown_sku", "Line has no SKU", ["sku = none"]);
   if (!item) {
     return review(order, line, "unknown_stock_record", `No stock record or SKU prefix rule for SKU "${line.sku}"`, [

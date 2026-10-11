@@ -9,7 +9,7 @@
 // relying on the numbers; mismatches show up as warnings and an unbalanced
 // payout, never as silent errors.
 
-import { toCents } from "../money";
+import { convertAtRate, toCents } from "../money";
 import { rescaleOrder } from "../rules/engine";
 import type { Adjustment, Fee, FeeCategory, Issue, NormalisedPayout, OrderSale, RawTransaction, Refund, SourceRef } from "../types";
 
@@ -17,6 +17,8 @@ export interface EbayConfig {
   clientId: string;
   clientSecret: string;
   refreshToken: string;
+  /** A ready user access token (for one-off validation runs). Skips the refresh. */
+  accessToken?: string;
   marketplaceId: string; // EBAY_AU
   fetch?: typeof fetch;
 }
@@ -37,6 +39,15 @@ export interface EbayPayout {
   transactionCount?: number;
 }
 
+/** Fees on a transaction, in AUD cents, with the evidence used to get there. */
+interface FeeLine {
+  feeType: string | undefined;
+  lineItemId: string | null;
+  rawAmount: string;
+  rawCurrency: string;
+  aud: number;
+}
+
 export interface EbayTransaction {
   transactionId: string;
   transactionType: string; // SALE, REFUND, CREDIT, DISPUTE, NON_SALE_CHARGE, SHIPPING_LABEL, TRANSFER, ADJUSTMENT, ...
@@ -49,6 +60,9 @@ export interface EbayTransaction {
   transactionMemo?: string;
   totalFeeAmount?: Amount;
   totalFeeBasisAmount?: Amount;
+  /** Live API spelling (Oct 2026). */
+  ebayCollectedTaxAmount?: Amount;
+  /** Spelling in older eBay docs; read too, just in case. */
   eBayCollectedTaxAmount?: Amount;
   orderLineItems?: {
     lineItemId: string;
@@ -95,6 +109,7 @@ export class EbayClient {
   }
 
   private async accessToken(): Promise<string> {
+    if (this.cfg.accessToken) return this.cfg.accessToken;
     if (this.token && this.token.expires > Date.now() + 60_000) return this.token.value;
     const res = await this.f("https://api.ebay.com/identity/v1/oauth2/token", {
       method: "POST",
@@ -119,11 +134,16 @@ export class EbayClient {
           Accept: "application/json",
         },
       });
-      if ((res.status === 429 || res.status >= 500) && attempt < 4) {
-        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
-        continue;
+      if (!res.ok) {
+        const body = await res.text();
+        // eBay answers some token problems with a 500 in the OAuth domain: retrying won't help.
+        const authProblem = /"domain"\s*:\s*"OAuth"/.test(body);
+        if ((res.status === 429 || res.status >= 500) && !authProblem && attempt < 4) {
+          await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+          continue;
+        }
+        throw new Error(`eBay ${res.status} ${new URL(url).pathname}: ${body.replace(/\s+/g, " ").slice(0, 300)}`);
       }
-      if (!res.ok) throw new Error(`eBay ${res.status} ${url}: ${await res.text()}`);
       return (await res.json()) as T;
     }
   }
@@ -152,23 +172,36 @@ export class EbayClient {
     return out;
   }
 
-  async order(orderId: string): Promise<EbayOrder | null> {
+  /** Order details, or the reason they couldn't be fetched (never swallowed). */
+  async order(orderId: string): Promise<{ order: EbayOrder } | { error: string }> {
     try {
-      return await this.get<EbayOrder>(`${FULFILLMENT}/order/${encodeURIComponent(orderId)}`);
-    } catch {
-      return null;
+      return { order: await this.get<EbayOrder>(`${FULFILLMENT}/order/${encodeURIComponent(orderId)}`) };
+    } catch (e) {
+      return { error: (e as Error).message };
     }
   }
 
-  async fetchPayout(p: EbayPayout): Promise<NormalisedPayout> {
-    const txns = await this.payoutTransactions(p.payoutId);
-    const ids = [...new Set(txns.map((t) => t.orderId).filter((x): x is string => !!x))];
+  async fetchRaw(p: EbayPayout): Promise<{
+    payout: EbayPayout;
+    transactions: EbayTransaction[];
+    orders: Map<string, EbayOrder>;
+    orderErrors: Map<string, string>;
+  }> {
+    const transactions = await this.payoutTransactions(p.payoutId);
+    const ids = [...new Set(transactions.map((t) => t.orderId).filter((x): x is string => !!x))];
     const orders = new Map<string, EbayOrder>();
+    const orderErrors = new Map<string, string>();
     for (const id of ids) {
-      const o = await this.order(id);
-      if (o) orders.set(id, o);
+      const r = await this.order(id);
+      if ("order" in r) orders.set(id, r.order);
+      else orderErrors.set(id, r.error);
     }
-    return normaliseEbayPayout(p, txns, orders);
+    return { payout: p, transactions, orders, orderErrors };
+  }
+
+  async fetchPayout(p: EbayPayout): Promise<NormalisedPayout> {
+    const raw = await this.fetchRaw(p);
+    return normaliseEbayPayout(raw.payout, raw.transactions, raw.orders, raw.orderErrors);
   }
 }
 
@@ -255,11 +288,56 @@ export function ebayOrderToSale(o: EbayOrder, warnings: string[], sources: Sourc
   };
 }
 
+/**
+ * Fees on a SALE or REFUND converted to AUD.
+ *
+ * Live LOFI data (Oct 2026): on a sale to an overseas buyer, `amount` is in
+ * AUD (converted, with convertedFromCurrency / convertedFromValue /
+ * exchangeRate), but totalFeeAmount, totalFeeBasisAmount and every itemised
+ * fee are in the buyer's currency. Each foreign fee is converted at eBay's own
+ * exchangeRate for that transaction. eBay's AUD net stays authoritative
+ * because it is what was paid out; gross = net + converted fees. This is a
+ * working method until LOFI's FX policy (C4) is approved.
+ */
+function feesInAud(
+  t: EbayTransaction,
+  issue: (msg: string) => void,
+): { lines: FeeLine[]; totalAud: number; unitemisedAud: number; currency: string; rate: string | null } {
+  const txnCurrency = t.amount.convertedFromCurrency ?? t.amount.currency;
+  const rate = t.amount.convertedFromCurrency ? (t.amount.exchangeRate ?? null) : null;
+  const toAud = (a: Amount): number => {
+    if (a.currency === "AUD") return toCents(a.value);
+    if (a.currency !== txnCurrency || !rate) {
+      issue(`fee in ${a.currency} but the transaction is in ${txnCurrency}${rate ? "" : " with no exchange rate"}`);
+      return 0;
+    }
+    return convertAtRate(toCents(a.value), rate);
+  };
+  const lines: FeeLine[] = [];
+  for (const li of t.orderLineItems ?? []) {
+    for (const mf of li.marketplaceFees ?? []) {
+      lines.push({ feeType: mf.feeType, lineItemId: li.lineItemId, rawAmount: mf.amount.value, rawCurrency: mf.amount.currency, aud: toAud(mf.amount) });
+    }
+  }
+  const totalForeign = t.totalFeeAmount ? toCents(t.totalFeeAmount.value) : 0;
+  const itemisedForeign = (t.orderLineItems ?? []).flatMap((li) => li.marketplaceFees ?? []).reduce((a, mf) => a + toCents(mf.amount.value), 0);
+  const unitemisedForeign = totalForeign - itemisedForeign;
+  let unitemisedAud = 0;
+  if (unitemisedForeign !== 0 && t.totalFeeAmount) {
+    if (t.totalFeeAmount.currency === "AUD") unitemisedAud = unitemisedForeign;
+    else if (t.totalFeeAmount.currency === txnCurrency && rate) unitemisedAud = convertAtRate(unitemisedForeign, rate);
+    else issue(`fees in ${t.totalFeeAmount.currency} but the transaction is in ${txnCurrency}${rate ? "" : " with no exchange rate"}`);
+  }
+  const totalAud = lines.reduce((a, l) => a + l.aud, 0) + unitemisedAud;
+  return { lines, totalAud, unitemisedAud, currency: txnCurrency, rate };
+}
+
 /** Pure: eBay payout + transactions + orders -> NormalisedPayout. */
 export function normaliseEbayPayout(
   p: EbayPayout,
   txns: EbayTransaction[],
   orders: Map<string, EbayOrder>,
+  orderErrors: Map<string, string> = new Map(),
 ): NormalisedPayout {
   const warnings: string[] = [];
   const issues: Issue[] = [];
@@ -309,46 +387,73 @@ export function normaliseEbayPayout(
 
     switch (t.transactionType) {
       case "SALE": {
-        // Assumption (unverified on live data): a SALE arrives net of selling
-        // fees, so gross = net + fees. Because of this the payout total alone
-        // can't prove the gross; the order amount check below does.
-        const feeTotal = toCents(t.totalFeeAmount?.value);
-        const gross = signed(t) + feeTotal;
-        let itemised = 0;
-        for (const li of t.orderLineItems ?? []) {
-          for (const mf of li.marketplaceFees ?? []) {
-            const c = toCents(mf.amount.value);
-            itemised += c;
-            const ft = feeType(mf.feeType);
-            fees.push({
-              type: ft.type,
-              category: ft.category,
-              cents: c,
-              orderId,
-              description: `${mf.feeType} ${orderId}`,
-              source: ref(t, { lineItemId: li.lineItemId, rawAmount: mf.amount.value, rawCurrency: mf.amount.currency }),
-            });
-          }
+        // A SALE arrives net of selling fees, so gross = net + fees. Confirmed
+        // on live LOFI payouts (Oct 2026): net + totalFeeAmount equalled
+        // totalFeeBasisAmount on every sale. The payout total alone can't
+        // prove the gross (it's circular), so it is cross-checked against
+        // eBay's fee basis here and against the order below.
+        const fx = feesInAud(t, (msg) =>
+          issues.push({ code: "non_aud_transaction", severity: "blocking", message: `eBay sale ${t.transactionId}: ${msg}`, transactionId: t.transactionId }),
+        );
+        const gross = signed(t) + fx.totalAud;
+        for (const l of fx.lines) {
+          const ft = feeType(l.feeType);
+          fees.push({
+            type: ft.type,
+            category: ft.category,
+            cents: l.aud,
+            orderId,
+            description: `${l.feeType} ${orderId}${l.rawCurrency !== "AUD" ? ` (${l.rawCurrency} ${l.rawAmount} at ${fx.rate})` : ""}`,
+            source: ref(t, { lineItemId: l.lineItemId, rawAmount: l.rawAmount, rawCurrency: l.rawCurrency }),
+          });
         }
-        if (feeTotal !== itemised) {
+        if (fx.unitemisedAud !== 0) {
           fees.push({
             type: "ebay_other_fee",
             category: "other",
-            cents: feeTotal - itemised,
+            cents: fx.unitemisedAud,
             orderId,
             description: `Unitemised fees ${orderId}`,
-            source: ref(t, { rawAmount: t.totalFeeAmount?.value ?? null }),
+            source: ref(t, { rawAmount: t.totalFeeAmount?.value ?? null, rawCurrency: t.totalFeeAmount?.currency ?? null }),
           });
         }
-        if (toCents(t.eBayCollectedTaxAmount?.value) !== 0) {
-          warnings.push(`eBay order ${orderId}: eBay collected tax on this sale; check the gross`);
+        if (t.totalFeeBasisAmount) {
+          // eBay's fee basis is in the transaction currency: compare like with like.
+          const basis = toCents(t.totalFeeBasisAmount.value);
+          const netTxn = fx.rate ? toCents(t.amount.convertedFromValue) : signed(t);
+          const grossTxn = netTxn + toCents(t.totalFeeAmount?.value);
+          if (basis !== grossTxn) {
+            warnings.push(
+              `eBay sale ${t.transactionId}: net + fees = ${grossTxn} but eBay's fee basis is ${basis} (${t.totalFeeBasisAmount.currency} cents); check the order total`,
+            );
+          }
+          if (fx.rate) {
+            const basisAud = convertAtRate(basis, fx.rate);
+            if (Math.abs(basisAud - gross) > fx.lines.length + 1) {
+              warnings.push(`eBay sale ${t.transactionId}: converted fee basis ${basisAud} cents differs from gross ${gross} cents by more than rounding`);
+            }
+          }
+        }
+        if (fx.rate) {
+          const msg = `eBay sale ${t.transactionId}: buyer paid in ${fx.currency}; fees converted to AUD at eBay's rate ${fx.rate} (FX policy C4 pending)`;
+          warnings.push(msg);
+          issues.push({ code: "fx_policy_pending", severity: "signoff", message: msg, transactionId: t.transactionId, orderId });
+        }
+        const collectedTax = t.ebayCollectedTaxAmount ?? t.eBayCollectedTaxAmount;
+        if (collectedTax && toCents(collectedTax.value) !== 0) {
+          // e.g. EU VAT (IOSS) or US sales tax: collected and remitted by eBay,
+          // not part of eBay's fee basis or of the amount paid out to LOFI.
+          warnings.push(
+            `eBay sale ${t.transactionId}: eBay collected and remitted ${collectedTax.currency} ${collectedTax.value} tax; it is outside LOFI's gross`,
+          );
         }
         const o = orderId ? orders.get(orderId) : undefined;
         if (!o) {
+          const why = orderId ? orderErrors.get(orderId) : undefined;
           issues.push({
             code: "order_details_missing",
             severity: "blocking",
-            message: `eBay order ${orderId ?? t.transactionId}: order details not found`,
+            message: `eBay order ${orderId ?? t.transactionId}: order details not available${why ? ` (${why})` : ""}`,
             orderId,
             transactionId: t.transactionId,
           });
@@ -358,10 +463,10 @@ export function normaliseEbayPayout(
             orderDate: t.transactionDate,
             destinationCountry: null,
             shippingProgram: "unknown",
-            buyerCurrency: null,
+            buyerCurrency: fx.rate ? fx.currency : null,
             grossCents: gross,
             lines: [
-              { lineId: `${t.transactionId}:unknown`, sku: null, title: "Order details unavailable", quantity: 1, grossCents: gross, discountCents: 0 },
+              { lineId: `${t.transactionId}:unknown`, sku: null, title: "Order details unavailable", quantity: 1, grossCents: gross, discountCents: 0, placeholder: true },
             ],
             shippingCents: 0,
             gateway: "eBay managed payments",
@@ -370,6 +475,7 @@ export function normaliseEbayPayout(
           break;
         }
         let sale = ebayOrderToSale(o, warnings, [src]);
+        if (fx.rate && !sale.buyerCurrency) sale = { ...sale, buyerCurrency: fx.currency };
         if (sale.grossCents !== gross) {
           issues.push({
             code: "sale_amount_mismatch",
@@ -385,20 +491,58 @@ export function normaliseEbayPayout(
         break;
       }
       case "REFUND": {
+        // A REFUND is booked net of the selling fees eBay credits back, the
+        // mirror image of a SALE. Live LOFI payout (Oct 2026): amount 23.46
+        // DEBIT + totalFeeAmount 2.44 = totalFeeBasisAmount 25.90. So the buyer
+        // was refunded net + fees, and the fees come back as credits.
         const o = orderId ? orders.get(orderId) : undefined;
-        if (toCents(t.totalFeeAmount?.value) !== 0) {
+        const fx = feesInAud(t, (msg) =>
+          issues.push({ code: "non_aud_transaction", severity: "blocking", message: `eBay refund ${t.transactionId}: ${msg}`, transactionId: t.transactionId }),
+        );
+        const refundGross = -signed(t) + fx.totalAud;
+        for (const l of fx.lines) {
+          const ft = feeType(l.feeType);
+          fees.push({
+            type: ft.type,
+            category: ft.category,
+            cents: -l.aud,
+            orderId,
+            description: `${l.feeType} credited on refund ${orderId ?? t.transactionId}${l.rawCurrency !== "AUD" ? ` (${l.rawCurrency} ${l.rawAmount} at ${fx.rate})` : ""}`,
+            source: ref(t, { lineItemId: l.lineItemId, rawAmount: l.rawAmount, rawCurrency: l.rawCurrency }),
+          });
+        }
+        if (fx.unitemisedAud !== 0) {
+          fees.push({
+            type: "ebay_other_fee",
+            category: "other",
+            cents: -fx.unitemisedAud,
+            orderId,
+            description: `Unitemised fee credit on refund ${orderId ?? t.transactionId}`,
+            source: ref(t, { rawAmount: t.totalFeeAmount?.value ?? null, rawCurrency: t.totalFeeAmount?.currency ?? null }),
+          });
+        }
+        if (t.totalFeeBasisAmount && !fx.rate && toCents(t.totalFeeBasisAmount.value) !== refundGross) {
           warnings.push(
-            `eBay refund ${t.transactionId}: carries ${t.totalFeeAmount?.value} of fees; fee credits on refunds aren't itemised yet`,
+            `eBay refund ${t.transactionId}: net + fee credit = ${refundGross} cents but eBay's fee basis is ${toCents(t.totalFeeBasisAmount.value)} cents`,
           );
+        }
+        if (fx.rate) {
+          const msg = `eBay refund ${t.transactionId}: in ${fx.currency}; fee credits converted at eBay's rate ${fx.rate} (FX policy C4 pending)`;
+          warnings.push(msg);
+          issues.push({ code: "fx_policy_pending", severity: "signoff", message: msg, transactionId: t.transactionId, orderId });
         }
         refunds.push({
           orderId: orderId ?? t.transactionId,
           orderName: o ? ebayOrderToSale(o, []).orderName : `eBay ${orderId ?? t.transactionId}`,
-          cents: -signed(t),
+          cents: refundGross,
           date: t.transactionDate,
           order: o ? ebayOrderToSale(o, warnings) : null,
           source: src,
         });
+        if (!o && orderId) {
+          const why = orderErrors.get(orderId);
+          warnings.push(`eBay refund ${t.transactionId}: original order ${orderId} not available${why ? " (fetch failed)" : " (not in this payout's orders)"}`);
+        }
         break;
       }
       case "NON_SALE_CHARGE": {

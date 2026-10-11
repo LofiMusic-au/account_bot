@@ -45,8 +45,8 @@ npx wrangler secret put DASHBOARD_TOKEN     # or put the Worker behind Cloudflar
 npm run deploy
 ```
 
-- **Shopify:** a custom app with `read_orders` and `read_shopify_payments_payouts` (or the broader `read_shopify_payments`). Shopify's docs confirm this scope for balance transactions. Set `SHOPIFY_SHOP` in `wrangler.toml`.
-- **eBay:** a developer app and a user refresh token for LOFI's seller account, with `sell.finances` and `sell.fulfillment.readonly`. The code requests exactly these two scopes when refreshing its token.
+- **Shopify:** a custom app with `read_orders` and `read_shopify_payments`. Shopify's validator also lists `read_shopify_payments_accounts` for `shopifyPaymentsAccount`. The Admin API version is pinned to `2026-10` in `wrangler.toml`.
+- **eBay:** a developer app and a user refresh token for LOFI's seller account, with `sell.finances` and `sell.fulfillment.readonly`. The code requests exactly these two scopes when refreshing its token. The existing token in the Migrator project reads Finances but is rejected by the Fulfillment API.
 - Secrets live only in Wrangler secrets or a local `.dev.vars`. Both are git-ignored, along with `.env` files and local databases.
 
 ## Try it locally with demo data
@@ -73,7 +73,11 @@ npm run typecheck    # src (Workers types) and test (Node types)
 
 ## Before trusting the numbers
 
-1. **Run against real payouts and compare with how they were entered by hand.** Neither channel has been run against a live payout. See "Unverified platform assumptions" in HANDOFF.md.
+1. **Run against real payouts and compare with how they were entered by hand.**
+   - Five live eBay payouts reconcile to the cent. See `docs/live-validation-2026-10.md`.
+   - eBay order details still need a token with Fulfillment access.
+   - Shopify Payments hasn't been read live yet, because no available token has the payments scope.
+   - Use `npm run live:validate -- ebay|shopify --scan`, then pass a payout ID. It is read-only and writes to the git-ignored `.live/` folder.
 2. **Load stock facts.** Load them item by item through `POST /api/stock`, or with SKU prefix rules for families of stock.
 3. **When the accountant signs off a scenario,** set `signedOff: true` in `src/rules/config.ts`. Then update `FEE_TAX`, `EBAY_INTERNATIONAL_SHIPPING_TREATMENT` and `TRADE_IN_TREATMENT`.
 

@@ -126,7 +126,9 @@ Built on 4a without changing the architecture. Not merged to `main`.
 
 ## 5. What's verified vs assumed about the platform APIs
 
-### Shopify (store "LOFI Music", AUD, `taxesIncluded: true`)
+### Shopify (store "LOFI Music", lofi-music.myshopify.com, AUD, `taxesIncluded: true`)
+
+**Live payout validation is blocked.** No available credential has the Shopify Payments scope (see `docs/live-validation-2026-10.md`). The API version is now pinned to `2026-10`.
 
 - All three GraphQL queries in `channels/shopify.ts` were **validated against Shopify's live Admin schema**.
 - Real orders show gateways `shopify_payments` and `Afterpay`, with `sourceName: "web"`. Shopify charges 10% GST on every line and on shipping, including consignment items. That is the core error the system corrects. Example: order #3252, Korg Wavestation, $854.05. Shopify GST is $77.64; at 25% commission under B1 it should be $19.41.
@@ -143,15 +145,21 @@ Built on 4a without changing the architecture. Not merged to `main`.
 
 ### eBay
 
-- No developer app exists yet. LOFI needs one, plus a user refresh token with the scopes `sell.finances` and `sell.fulfillment.readonly`.
-- Field names follow eBay's published types (Transaction, Order, LineItem, FulfillmentStartInstruction, Program).
-- **Unverified assumptions:**
-  - The Finances host is `https://apiz.ebay.com/sell/finances/v1`, and the header `X-EBAY-C-MARKETPLACE-ID: EBAY_AU` is required.
-  - The transaction filter is `filter=payoutId:{ID}` with `limit` up to 1000.
-  - For a SALE, `amount` is **net of fees**, so the code uses gross = signed amount + `totalFeeAmount`. Check this first; if it's wrong, every eBay payout will show up as unbalanced.
-  - EIS is detected by `order.program.ebayInternationalShipping`, or by `fulfillmentStartInstructions[0].ebaySupportedFulfillment === true` with a non-AU destination. The final destination comes from `finalDestinationAddress.countryCode`.
-  - Order line amounts come from `discountedLineItemCost ?? lineItemCost`, and shipping from `deliveryCost.shippingCost`.
-- Every mismatch shows as a warning plus an `unbalanced` status, never a silent error.
+Live-validated on five payouts in October 2026. All reconciled to $0.00. Full detail is in `docs/live-validation-2026-10.md`.
+
+- **Confirmed:**
+  - A SALE's `amount` is net of fees, and net + `totalFeeAmount` = `totalFeeBasisAmount`.
+  - Itemised `marketplaceFees` sum to `totalFeeAmount`.
+  - The payout equals the sum of the signed transaction amounts.
+  - The `filter=payoutId:{id}` query returns exactly `transactionCount` transactions.
+  - The Finances host is `apiz.ebay.com`, with the header `EBAY_AU`.
+- **Changed:**
+  - A REFUND is net of the fee credit, so refund gross = amount + fees, and the fees are credits.
+  - On foreign-currency sales, fees and the fee basis are in the buyer's currency. They are converted at the transaction's `exchangeRate`, and the C4 FX policy is still pending.
+  - The tax field is spelled `ebayCollectedTaxAmount` in the live API.
+  - `getOrder` errors are now surfaced instead of swallowed.
+- **Blocked:** the available token can't use the Fulfillment API. Until a token with `sell.fulfillment.readonly` exists, the following can't be checked: SKUs, destination, eBay International Shipping detection, line prices and discounts.
+- **Transaction types seen in 30 days:** SALE, REFUND, and NON_SALE_CHARGE (`OTHER_FEES`, probably the store subscription, not assumed).
 
 ---
 

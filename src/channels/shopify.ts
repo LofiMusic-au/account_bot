@@ -176,11 +176,15 @@ export class ShopifyClient {
     return map;
   }
 
+  async fetchRaw(p: ShopifyPayout): Promise<{ payout: ShopifyPayout; transactions: ShopifyBalanceTxn[]; orders: Map<string, ShopifyOrder> }> {
+    const transactions = await this.payoutTransactions(p.legacyResourceId);
+    const orderIds = [...new Set(transactions.map((t) => t.associatedOrder?.id).filter((x): x is string => !!x))];
+    return { payout: p, transactions, orders: await this.orders(orderIds) };
+  }
+
   async fetchPayout(p: ShopifyPayout): Promise<NormalisedPayout> {
-    const txns = await this.payoutTransactions(p.legacyResourceId);
-    const orderIds = [...new Set(txns.map((t) => t.associatedOrder?.id).filter((x): x is string => !!x))];
-    const orders = await this.orders(orderIds);
-    const payout = normaliseShopifyPayout(p, txns, orders);
+    const raw = await this.fetchRaw(p);
+    const payout = normaliseShopifyPayout(raw.payout, raw.transactions, raw.orders);
     for (const d of this.deprecations) payout.warnings.push(`Shopify API ${this.cfg.apiVersion} reports a deprecation used by this app: ${d}`);
     return payout;
   }
@@ -398,7 +402,7 @@ export function normaliseShopifyPayout(
         buyerCurrency: null,
         grossCents: charge.cents,
         lines: [
-          { lineId: `${orderId}:unknown`, sku: null, title: "Order details unavailable", quantity: 1, grossCents: charge.cents, discountCents: 0 },
+          { lineId: `${orderId}:unknown`, sku: null, title: "Order details unavailable", quantity: 1, grossCents: charge.cents, discountCents: 0, placeholder: true },
         ],
         shippingCents: 0,
         gateway: "shopify_payments",

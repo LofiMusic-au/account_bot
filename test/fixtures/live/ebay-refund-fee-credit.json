@@ -1,0 +1,184 @@
+{
+ "_note": "Masked from live eBay payout (2026-10-08). Real IDs replaced; amounts, field shapes and types kept. No buyer data, no bank details.",
+ "payout": {
+  "payoutId": "LIVE-PAYOUT-1",
+  "payoutStatus": "SUCCEEDED",
+  "payoutDate": "2026-10-08T15:05:44.000Z",
+  "amount": {
+   "value": "114.95",
+   "currency": "AUD"
+  },
+  "transactionCount": 3
+ },
+ "transactions": [
+  {
+   "transactionId": "LIVE-TXN-1",
+   "orderId": "LIVE-ORDER-1",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "REFUND",
+   "amount": {
+    "value": "23.46",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "25.9",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "2.44",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-1",
+     "feeBasisAmount": {
+      "value": "32.9",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "1.22",
+        "currency": "AUD"
+       }
+      }
+     ]
+    },
+    {
+     "lineItemId": "LIVE-LINE-2",
+     "feeBasisAmount": {
+      "value": "32.9",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "1.22",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "DEBIT",
+   "transactionDate": "2026-10-07T23:43:27.047Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd",
+   "references": [
+    {
+     "referenceId": "LIVE-REF-1",
+     "referenceType": "REFUND_ID"
+    }
+   ]
+  },
+  {
+   "transactionId": "LIVE-TXN-2",
+   "orderId": "LIVE-ORDER-2",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "110.63",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "126.0",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "15.37",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-3",
+     "feeBasisAmount": {
+      "value": "144.9",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "INTERNATIONAL_FEE",
+       "amount": {
+        "value": "1.45",
+        "currency": "AUD"
+       },
+       "feeMemo": "Charged because the delivery address is in New Zealand. Final amount: AU $144.90."
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "13.62",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-10-07T09:56:52.126Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd",
+   "ebayCollectedTaxAmount": {
+    "value": "18.9",
+    "currency": "AUD"
+   }
+  },
+  {
+   "transactionId": "LIVE-TXN-3",
+   "orderId": "LIVE-ORDER-3",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "27.78",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "31.44",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "3.66",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-4",
+     "feeBasisAmount": {
+      "value": "31.44",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "3.36",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-10-07T01:49:04.806Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd"
+  }
+ ],
+ "orders": []
+}

@@ -62,6 +62,8 @@ export interface SaleLine {
   grossCents: number;
   /** AUD cents of discount already taken off grossCents (informational). */
   discountCents: number;
+  /** Stands in for an order whose details couldn't be fetched; the order-level issue explains it. */
+  placeholder?: boolean;
 }
 
 export interface OrderSale {

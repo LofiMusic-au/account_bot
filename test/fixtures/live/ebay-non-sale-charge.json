@@ -1,0 +1,77 @@
+{
+ "_note": "Masked from live eBay payout (2026-10-02). Real IDs replaced; amounts, field shapes and types kept. No buyer data, no bank details.",
+ "payout": {
+  "payoutId": "LIVE-PAYOUT-1",
+  "payoutStatus": "SUCCEEDED",
+  "payoutDate": "2026-10-02T15:06:04.000Z",
+  "amount": {
+   "value": "503.68",
+   "currency": "AUD"
+  },
+  "transactionCount": 2
+ },
+ "transactions": [
+  {
+   "transactionId": "LIVE-TXN-1",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "NON_SALE_CHARGE",
+   "amount": {
+    "value": "74.95",
+    "currency": "AUD"
+   },
+   "bookingEntry": "DEBIT",
+   "transactionDate": "2026-10-01T15:08:18.860Z",
+   "transactionStatus": "PAYOUT",
+   "transactionMemo": "2026-09-30 - 2026-10-30",
+   "feeType": "OTHER_FEES"
+  },
+  {
+   "transactionId": "LIVE-TXN-2",
+   "orderId": "LIVE-ORDER-1",
+   "payoutId": "LIVE-PAYOUT-1",
+   "transactionType": "SALE",
+   "amount": {
+    "value": "578.63",
+    "currency": "AUD"
+   },
+   "totalFeeBasisAmount": {
+    "value": "639.0",
+    "currency": "AUD"
+   },
+   "totalFeeAmount": {
+    "value": "60.37",
+    "currency": "AUD"
+   },
+   "orderLineItems": [
+    {
+     "lineItemId": "LIVE-LINE-1",
+     "feeBasisAmount": {
+      "value": "639.0",
+      "currency": "AUD"
+     },
+     "marketplaceFees": [
+      {
+       "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+       "amount": {
+        "value": "0.3",
+        "currency": "AUD"
+       }
+      },
+      {
+       "feeType": "FINAL_VALUE_FEE",
+       "amount": {
+        "value": "60.07",
+        "currency": "AUD"
+       }
+      }
+     ]
+    }
+   ],
+   "bookingEntry": "CREDIT",
+   "transactionDate": "2026-10-01T12:03:57.487Z",
+   "transactionStatus": "PAYOUT",
+   "paymentsEntity": "eBay Commerce Australia Pty Ltd"
+  }
+ ],
+ "orders": []
+}

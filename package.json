@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p test",
     "test": "vitest run",
     "demo:sql": "mkdir -p .wrangler && vite-node scripts/demo-sql.ts > .wrangler/demo.sql",
-    "demo:load": "wrangler d1 execute lofi-recon --local --file .wrangler/demo.sql"
+    "demo:load": "wrangler d1 execute lofi-recon --local --file .wrangler/demo.sql",
+    "live:validate": "vite-node scripts/live-validate.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
