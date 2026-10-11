@@ -4,6 +4,9 @@ import { fmt } from "./money";
 import { FEE_CATEGORIES, REPORT_VERSION, saleScenarioCounts, type PayoutReport } from "./reconcile";
 import type { ReportSummary, SourceInfo } from "./db";
 import type { Channel, FeeCategory, Issue, LineClassification, SourceRef } from "./types";
+import { CATEGORIES, HISTORICAL_BASELINE, type LogicalCategory } from "./accounting/categories";
+import { periodTotals } from "./accounting/consignment";
+import type { ConsignmentRow } from "./db";
 
 const esc = (s: unknown) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -87,7 +90,7 @@ form.factform{display:flex;flex-wrap:wrap;gap:6px;align-items:center}form.factfo
 input.money{width:7em}input.pct{width:5em}details.prefix{flex-basis:100%}details.prefix summary{font-size:12px}
 label.inline{display:inline-flex;flex-direction:row;align-items:center;gap:6px;color:var(--fg)}
 </style></head><body>
-<header><b>LOFI payout reconciliation</b><a href="/">Payouts</a><a href="/review">Review queue</a><a href="/stock/new">Add stock record</a>
+<header><b>LOFI payout reconciliation</b><a href="/">Payouts</a><a href="/review">Review queue</a><a href="/consignments">Consignments</a><a href="/stock/new">Add stock record</a>
 <span class="muted" style="margin-left:auto">Report-only · nothing is posted to QuickBooks</span></header>
 <main>${body}</main></body></html>`;
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -289,7 +292,9 @@ ${b.unsupportedCents ? `<tr><td class="review">Unsupported transaction types (co
 </table></div>
 ${r.warnings.length ? `<h2>Notes</h2><div class="note"><ul style="margin:0;padding-left:18px">${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
 
-<h2>By scenario</h2>
+${baselineSection(r)}
+
+<h2>By draft GST scenario</h2>
 <div class="wrap"><table><tr><th>Scenario</th><th>Sign-off</th><th class="n">Lines</th><th class="n">Amount</th><th class="n">GST</th></tr>
 ${t.byScenario.map((s) => `<tr><td><b>${esc(s.code)}</b> ${esc(s.name)}</td><td>${s.code === "REVIEW" ? chip("review", "review") : s.signedOff ? chip("approved", "signed off") : chip("draft", "draft")}</td><td class="n">${s.count}</td><td class="n">${fmt(s.grossCents)}</td><td class="n">${fmt(s.gstCents)}</td></tr>`).join("")}
 </table></div>
@@ -310,6 +315,90 @@ ${r.adjustments.map((a) => `<tr><td>${esc(a.type)}</td><td>${esc(a.description)}
       : "No stored source data (demo or older report)."
   }</div>`;
   return page(`Payout ${r.payoutId}`, body);
+}
+
+function baselineSection(r: PayoutReport): string {
+  const b = r.baseline;
+  if (!b) return "";
+  const order: LogicalCategory[] = ["SALES_DOMESTIC_GST", "SALES_OVERSEAS_NO_GST", "CONSIGNMENT_SALES_NO_GST", "REFUND", "EBAY_FEES", "SHOPIFY_FEES", "MARKETPLACE_ADJUSTMENTS", "UNCLASSIFIED"];
+  const rows = order
+    .filter((c) => b.totals[c] !== undefined)
+    .map((c) => {
+      const def = CATEGORIES[c];
+      const refundDetail =
+        c === "REFUND"
+          ? `<div class="muted small">${[...new Set(b.lines.filter((l) => l.category === "REFUND").map((l) => l.reversesCategory))].map((x) => `reverses ${esc(x)}`).join(", ")}</div>`
+          : "";
+      return `<tr><td><b>${esc(c)}</b> <span class="muted small">${esc(def.label)}</span>${refundDetail}</td><td class="small">${esc(def.historicalAccount ?? "—")}</td><td class="n ${c === "UNCLASSIFIED" ? "review" : ""}">${fmt(b.totals[c]!)}</td></tr>`;
+    })
+    .join("");
+  return `<h2>Historical baseline split</h2>
+<p class="muted small">How staff split this payout by hand: by ownership and destination only. Consignment sales go in full at no GST, and their commission is handled in the <a href="/consignments">consignment ledger</a>. This is LOFI's current method, <b>not</b> an accountant-approved treatment. ${b.complete ? `<span class="ready">Every line is categorised.</span>` : `<span class="review">${b.unclassifiedCount} line(s) not categorised yet.</span>`}</p>
+<div class="wrap"><table><tr><th>Category</th><th>Historical QuickBooks account</th><th class="n">Amount</th></tr>${rows}
+<tr class="total"><td>Total (equals the reconstructed payout)</td><td></td><td class="n">${fmt(b.sumCents)}</td></tr></table></div>`;
+}
+
+export function renderConsignments(rows: ConsignmentRow[], period: string | undefined, periods: string[]): Response {
+  const totals = periodTotals(
+    rows.map((r) => ({
+      accountingPeriod: r.accounting_period,
+      consignorId: r.consignor_id,
+      consignorName: r.consignor_name,
+      status: r.status === "calculated" ? ("calculated" as const) : ("incomplete" as const),
+      grossSaleCents: r.gross_sale_cents,
+      commissionCents: r.commission_cents,
+      commissionGstCents: r.commission_gst_cents,
+      consignorPayableCents: r.consignor_payable_cents,
+    })),
+  );
+  const byPeriod = new Map<string, typeof totals>();
+  for (const t of totals) byPeriod.set(t.period, [...(byPeriod.get(t.period) ?? []), t]);
+  const periodLinks = `<div style="margin:8px 0">${[undefined, ...periods]
+    .map((p) =>
+      p === period
+        ? `<span class="chip ready">${p ?? "All periods"}</span>`
+        : `<a class="chip" style="color:var(--muted);text-decoration:none" href="/consignments${p ? `?period=${p}` : ""}">${p ?? "All periods"}</a>`,
+    )
+    .join(" ")}</div>`;
+  const sum = (ts: typeof totals, k: "grossSaleCents" | "commissionCents" | "commissionGstCents" | "commissionExGstCents" | "consignorPayableCents") =>
+    ts.reduce((a, t) => a + t[k], 0);
+  const periodBlocks = [...byPeriod]
+    .map(
+      ([p, ts]) => `<h2>${esc(p)}</h2>
+<div class="tiles">
+<div class="tile"><div class="muted">Consignment sales</div><div class="v">${fmt(sum(ts, "grossSaleCents"))}</div></div>
+<div class="tile"><div class="muted">LOFI commission income (ex GST)</div><div class="v">${fmt(sum(ts, "commissionExGstCents"))}</div></div>
+<div class="tile"><div class="muted">GST payable on commission</div><div class="v">${fmt(sum(ts, "commissionGstCents"))}</div></div>
+<div class="tile"><div class="muted">Payable to consignors</div><div class="v">${fmt(sum(ts, "consignorPayableCents"))}</div></div>
+</div>
+<p class="muted small">These are the three figures LOFI used to calculate in the spreadsheet and journal by hand for the period. Nothing is posted.${
+        ts.some((t) => t.incomplete) ? ` <span class="review">${ts.reduce((a, t) => a + t.incomplete, 0)} entr${ts.reduce((a, t) => a + t.incomplete, 0) === 1 ? "y is" : "ies are"} incomplete and not included.</span>` : ""
+      }</p>
+<div class="wrap"><table><tr><th>Consignor</th><th class="n">Entries</th><th class="n">Sales</th><th class="n">Commission</th><th class="n">GST on commission</th><th class="n">Payable to consignor</th></tr>
+${ts
+  .map(
+    (t) => `<tr><td>${esc(t.consignorName ?? "No consignor recorded")}</td><td class="n">${t.entries}${t.incomplete ? ` <span class="review small">(${t.incomplete} incomplete)</span>` : ""}</td>
+<td class="n">${fmt(t.grossSaleCents)}</td><td class="n">${fmt(t.commissionCents)}</td><td class="n">${fmt(t.commissionGstCents)}</td><td class="n">${fmt(t.consignorPayableCents)}</td></tr>`,
+  )
+  .join("")}</table></div>`,
+    )
+    .join("");
+  const detail = `<h2>Entries</h2><div class="wrap"><table><tr><th>Date</th><th>Order</th><th>SKU</th><th>Consignor</th><th>Rule</th><th class="n">Sale</th><th class="n">Commission</th><th class="n">GST</th><th class="n">Payable</th><th>Status</th></tr>
+${rows
+  .map(
+    (r) => `<tr><td>${esc(r.sale_date)}${r.kind === "refund" ? ` ${chip("review", "refund")}` : ""}</td>
+<td><a href="${payoutLink(r.channel, r.payout_id)}">${esc(r.order_name ?? "")}</a></td><td><code>${esc(r.sku ?? "")}</code></td>
+<td>${esc(r.consignor_name ?? "—")}</td><td class="small">${r.commission_type === "percent" ? `${r.commission_value}%` : r.commission_type === "fixed" ? `$${r.commission_value} each` : "—"}</td>
+<td class="n">${fmt(r.gross_sale_cents)}</td><td class="n">${r.commission_cents === null ? "" : fmt(r.commission_cents)}</td>
+<td class="n">${r.commission_gst_cents === null ? "" : fmt(r.commission_gst_cents)}</td><td class="n">${r.consignor_payable_cents === null ? "" : fmt(r.consignor_payable_cents)}</td>
+<td>${r.status === "calculated" ? chip("approved", r.journal_status) : `${chip("review", "incomplete")}<div class="small muted">${esc(r.problem ?? "")}</div>`}</td></tr>`,
+  )
+  .join("")}
+${rows.length === 0 ? `<tr><td colspan="10" class="muted">No consignment sales yet. They appear here automatically when a payout includes a consigned item.</td></tr>` : ""}</table></div>`;
+  const body = `<h1>Consignment ledger</h1>
+<p class="muted">Replaces the consignment spreadsheet. Every consigned item in a payout appears here automatically. Each consignor's rule is applied: commission = rule × sale price after discounts, excluding shipping. GST on commission is 1/11 of the commission, and the consignor is paid the rest. The payout split records the full sale as <b>CONSIGNMENT_SALES_NO_GST</b>, and this ledger supplies the commission figures for the period's journal. ${esc(HISTORICAL_BASELINE.label)}.</p>
+${periodLinks}${periodBlocks}${detail}`;
+  return page("Consignments", body);
 }
 
 export interface ReviewItem {
@@ -413,8 +502,15 @@ ${sel("ownership", v.ownership, [["", "Ownership?"], ["owned", "LOFI-owned"], ["
 ${sel("acquired_from", v.acquired_from, [["", "Acquired from?"], ["registered_supplier", "GST-registered supplier"], ["private_seller", "Private / non-GST seller"], ["trade_in", "Trade-in"], ["other", "Other"]])}
 ${sel("item_condition", v.item_condition, [["", "Condition?"], ["new", "New"], ["secondhand", "Second-hand"]])}
 <input name="purchase_aud" inputmode="decimal" placeholder="Purchase $" value="${esc(v.purchase)}" aria-label="Purchase price" class="money">
-${sel("consignor_id", v.consignor_id, [["", "Consignor (if consigned)"], ...d.consignors.map((c): [string, string] => [String(c.id), `${c.name}${c.country ? ` · ${c.country}` : ""}`])])}
-<input name="commission" inputmode="decimal" placeholder="Comm. %" value="${esc(v.commission)}" aria-label="Commission percent" class="pct">
+${sel("consignor_id", v.consignor_id, [
+  ["", "Consignor (if consigned)"],
+  ...d.consignors.map((c): [string, string] => [
+    String(c.id),
+    `${c.name}${c.country ? ` · ${c.country}` : ""}${c.commission_value != null ? ` · ${c.commission_type === "fixed" ? `$${c.commission_value} each` : `${c.commission_value}%`}` : ""}`,
+  ]),
+])}
+<a class="small" href="/stock/new#new-consignor">+ New consignor</a>
+<input name="commission" inputmode="decimal" placeholder="Comm. % (blank = consignor's rule)" value="${esc(v.commission)}" aria-label="Commission percent override" class="pct" style="width:15em">
 <button>Save</button>
 ${
   suggestion
@@ -532,6 +628,8 @@ export interface ConsignorOption {
   country: string | null;
   australian_gst_registered: number | null;
   agreement_type: string | null;
+  commission_type?: string | null;
+  commission_value?: number | null;
 }
 
 export function renderStockForm(
@@ -565,7 +663,7 @@ ${message(msg)}
 <label>Notes<input name="notes"></label>
 <div style="align-self:end"><button>Save</button></div>
 </form>
-<h2>New consignor</h2>
+<h2 id="new-consignor">New consignor</h2>
 <form class="grid" method="post" action="/consignors">
 <label>Name<input name="name" required></label>
 <label>Contact<input name="contact"></label>

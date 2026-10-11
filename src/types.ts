@@ -240,8 +240,8 @@ export interface StockItem {
   commissionType?: "percent" | "fixed" | null;
   commissionValue?: number | null;
   overrideScenario?: ScenarioCode | null;
-  /** Where the record came from: its own row, or a SKU prefix default. */
-  source: "item" | "prefix";
+  /** Where the record came from: its own row, a SKU prefix rule, or LOFI's built-in SKU convention. */
+  source: "item" | "prefix" | "convention";
   /** The prefix that matched, when source = prefix. */
   prefix?: string;
   /** Division 66 record complete (seller name/address/description/date/price). */

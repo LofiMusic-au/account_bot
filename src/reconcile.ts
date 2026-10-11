@@ -9,6 +9,7 @@
 //   = expected settlement, compared with the actual payout.
 
 import { classifyOrder, rescaleOrder, type StockResolver } from "./rules/engine";
+import { baselineSplit, type BaselineSplit } from "./accounting/baseline";
 import { FEE_TAX, SCENARIOS } from "./rules/config";
 import type {
   Adjustment,
@@ -85,6 +86,8 @@ export interface PayoutReport {
   signoffCount: number;
   warnings: string[];
   sourceTransactionCount: number;
+  /** Stage 1 of LOFI's historical method: the payout split by logical category. */
+  baseline?: BaselineSplit;
   generatedAt: string;
 }
 
@@ -261,6 +264,7 @@ export function buildReport(payout: NormalisedPayout, resolve: StockResolver, no
     signoffCount,
     warnings,
     sourceTransactionCount: payout.raw.transactions.length,
+    baseline: baselineSplit(payout, resolve),
     generatedAt: now.toISOString(),
   };
 }

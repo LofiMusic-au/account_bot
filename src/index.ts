@@ -26,6 +26,8 @@ import {
   type ConsignorInput,
   setOrderDestination,
   setStockFact,
+  syncConsignmentLedger,
+  listConsignmentRows,
   sourceInfo,
   upsertStock,
   validateStock,
@@ -34,9 +36,10 @@ import {
   type StockInput,
 } from "./db";
 import { toCents } from "./money";
+import { consignmentEntries } from "./accounting/consignment";
 import { buildReport, type PayoutReport } from "./reconcile";
 import type { Channel, Issue, NormalisedPayout } from "./types";
-import { renderIndex, renderReport, renderReview, renderStockForm, type ConsignorOption, type ReviewItem } from "./ui";
+import { renderConsignments, renderIndex, renderReport, renderReview, renderStockForm, type ConsignorOption, type ReviewItem } from "./ui";
 
 export interface Env {
   DB: D1Database;
@@ -97,8 +100,11 @@ function sources(env: Env): Source[] {
 export async function rebuild(db: D1Database, payout: NormalisedPayout, extraIssues: Issue[] = []): Promise<PayoutReport> {
   const withFacts = applyOrderFacts(payout, await loadOrderFacts(db, payout));
   const p = { ...withFacts, issues: [...withFacts.issues, ...extraIssues] };
-  const report = buildReport(p, await loadResolver(db, p));
+  const resolve = await loadResolver(db, p);
+  const report = buildReport(p, resolve);
   await saveReport(db, report);
+  // Stage 2: the same sales feed the consignment subledger.
+  await syncConsignmentLedger(db, p.channel, p.payoutId, consignmentEntries(p, resolve));
   return report;
 }
 
@@ -218,7 +224,7 @@ async function form(req: Request): Promise<Record<string, string>> {
 
 async function consignorList(env: Env) {
   return (
-    await env.DB.prepare("SELECT id, name, country, australian_gst_registered, agreement_type FROM consignors ORDER BY name").all<ConsignorOption>()
+    await env.DB.prepare("SELECT id, name, country, australian_gst_registered, agreement_type, commission_type, commission_value FROM consignors ORDER BY name").all<ConsignorOption>()
   ).results;
 }
 
@@ -236,6 +242,13 @@ export default {
 
     if (req.method === "GET" && path === "/") {
       return renderIndex(await listReports(env.DB, 60, channelFilter), msg, canReset, channelFilter);
+    }
+
+    if (req.method === "GET" && path === "/consignments") {
+      const qp = url.searchParams.get("period");
+      const period = qp && /^\d{4}-\d{2}$/.test(qp) ? qp : undefined;
+      const periods = (await env.DB.prepare("SELECT DISTINCT accounting_period AS p FROM consignment_sales ORDER BY p DESC").all<{ p: string }>()).results.map((x) => x.p);
+      return renderConsignments(await listConsignmentRows(env.DB, period), period, periods);
     }
 
     if (req.method === "POST" && path === "/admin/clear-payouts") {
@@ -278,7 +291,7 @@ export default {
       }
       const skus = reports.flatMap((r) => r.issues.filter((i) => i.sku && i.severity === "blocking").map((i) => i.sku!));
       const facts = await loadFactsFor(env.DB, skus);
-      const consignors = (await env.DB.prepare("SELECT id, name, country, australian_gst_registered, agreement_type FROM consignors ORDER BY name").all<ConsignorOption>()).results;
+      const consignors = (await env.DB.prepare("SELECT id, name, country, australian_gst_registered, agreement_type, commission_type, commission_value FROM consignors ORDER BY name").all<ConsignorOption>()).results;
       return renderReview({ reports, consignors, items: facts.items, prefixes: facts.prefixes }, msg, canReset, channelFilter);
     }
 

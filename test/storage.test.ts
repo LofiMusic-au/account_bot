@@ -63,12 +63,14 @@ describe("idempotent re-import", () => {
 });
 
 describe("staff correct facts, not tax codes", () => {
-  it("unknown SKU -> ownership -> acquisition source -> ready", async () => {
+  it("an L- SKU with no record: owned by convention, so only the acquisition source is asked -> ready", async () => {
     const { d1, sqlite } = makeTestD1();
     seedFixtureFacts(sqlite);
     sqlite.prepare("DELETE FROM stock_items WHERE sku = 'L-DISC-1'").run();
     let r = await ingestAndReport(d1, shopifyFixture());
-    expect(r.issues.filter((i) => i.severity === "blocking").map((i) => i.code)).toEqual(["unknown_stock_record"]);
+    // The "L-" convention sets ownership only; the GST scenario still needs the source.
+    expect(r.issues.filter((i) => i.severity === "blocking").map((i) => i.code)).toEqual(["unknown_acquisition_source"]);
+    expect(r.sales.find((l) => l.sku === "L-DISC-1")!.explanation[0]).toBe('SKU convention "L-" = LOFI-owned (no individual record)');
 
     await setStockFact(d1, "L-DISC-1", "ownership", "owned", "Elektron Digitakt");
     r = (await rebuildStored(d1, "shopify", "9001"))!;

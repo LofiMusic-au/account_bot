@@ -16,6 +16,20 @@ Read `HANDOFF.md` first for the full project context, the decisions made and the
 - **Keep provenance.** Every normalised record carries a `SourceRef`. Raw transactions are stored in `source_transactions` with buyer details removed.
 - **Branches.** Work on feature branches; don't merge to `main` without being asked.
 
+## Historical accounting baseline
+
+LOFI's current method has two stages:
+1. **Payout split:** owned domestic goes to `SALES_DOMESTIC_GST`, owned overseas to `SALES_OVERSEAS_NO_GST`, and consignment in full to `CONSIGNMENT_SALES_NO_GST`. Fees go to `EBAY_FEES` / `SHOPIFY_FEES`, and refunds reverse the original category. This is `src/accounting/baseline.ts`.
+2. **Consignment subledger:** commission per consignor rule, 1/11 GST on the commission, the rest payable to the consignor, totalled per month for the periodic journal. This is `src/accounting/consignment.ts` and the `consignment_sales` table.
+
+Rules for this baseline:
+- **Reproduce it before changing it.** It is the operational baseline, *not* accountant-approved. Keep it separate from the draft GST scenarios.
+- **Recipes may change; source data may not.** Never rebuild or edit source transactions to change a treatment. Posted ledger entries are frozen.
+- **A balanced payout isn't proof the accounting is right.**
+- **Logical categories only.** No QuickBooks account IDs until milestone 2.
+- **The `L-` SKU convention sets ownership only, never the GST scenario.**
+- **The review queue asks for facts, not journal decisions.**
+
 ## Commands
 
 - `npm test`: vitest. Keep every scenario covered when changing rules.

@@ -1,6 +1,7 @@
 // D1 access: stock/consignor facts, source provenance, and payout reports.
 
 import { saleScenarioCounts, type PayoutReport } from "./reconcile";
+import type { ConsignmentEntry } from "./accounting/consignment";
 import type { StockResolver } from "./rules/engine";
 import type {
   AcquiredFrom,
@@ -61,7 +62,15 @@ const toConsignor = (r: ConsignorRow): Consignor => ({
   agreementType: r.agreement_type === "agency" || r.agreement_type === "153B" ? r.agreement_type : null,
 });
 
-/** Pure resolver over preloaded rows: an item's own record beats the longest matching prefix. */
+/**
+ * LOFI's SKU convention: "L-" SKUs are LOFI-owned stock. It sets ownership
+ * only. Acquisition source, condition and price must still be recorded, so
+ * the GST scenario is never derived from the prefix alone. "LC-" and other
+ * L-letter prefixes are not covered (their meaning isn't confirmed).
+ */
+export const OWNED_SKU_CONVENTION = /^L-/i;
+
+/** Pure resolver over preloaded rows: an item's own record beats the longest matching prefix, which beats the L- convention. */
 export function makeResolver(items: StockRow[], prefixes: PrefixRow[], consignors: ConsignorRow[]): StockResolver {
   const bySku = new Map(items.map((i) => [i.sku.trim().toUpperCase(), i]));
   const byId = new Map(consignors.map((c) => [c.id, toConsignor(c)]));
@@ -91,7 +100,10 @@ export function makeResolver(items: StockRow[], prefixes: PrefixRow[], consignor
       } satisfies StockItem;
     }
     const p = sortedPrefixes.find((x) => sku.trim().toUpperCase().startsWith(x.prefix.toUpperCase()));
-    if (!p) return null;
+    if (!p) {
+      if (!OWNED_SKU_CONVENTION.test(sku.trim())) return null;
+      return { sku, ownership: "owned", acquiredFrom: null, condition: null, purchaseCents: null, source: "convention", prefix: "L-" } satisfies StockItem;
+    }
     return {
       sku,
       ownership: p.ownership,
@@ -308,6 +320,92 @@ export async function sourceInfo(db: D1Database, channel: string, payoutId: stri
     .first<SourceInfo>();
 }
 
+// ------------------------------------------------------- consignment ledger
+
+/**
+ * Bring the consignment subledger in line with a payout's current entries.
+ * Idempotent on entry_key. Unposted entries are recalculated (a changed
+ * consignor rule flows through); posted entries are never touched. Unposted
+ * entries that no longer apply (e.g. the item turned out to be LOFI-owned)
+ * are removed. Source transactions are never modified here.
+ */
+export async function syncConsignmentLedger(db: D1Database, channel: string, payoutId: string, entries: ConsignmentEntry[], now = new Date()): Promise<void> {
+  const ts = now.toISOString();
+  const stmts: D1PreparedStatement[] = [];
+  for (const e of entries) {
+    stmts.push(
+      db
+        .prepare(
+          `INSERT INTO consignment_sales (entry_key, channel, payout_id, order_id, order_name, line_item_id, source_transaction_id, sku,
+             consignor_id, kind, sale_date, gross_sale_cents, shipping_cents, discount_cents, commission_basis, commission_type,
+             commission_value, commission_cents, commission_gst_cents, consignor_payable_cents, accounting_period, status, problem,
+             first_recorded_at, last_calculated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (entry_key) DO UPDATE SET
+             order_name = excluded.order_name, sku = excluded.sku, consignor_id = excluded.consignor_id,
+             sale_date = excluded.sale_date, gross_sale_cents = excluded.gross_sale_cents, shipping_cents = excluded.shipping_cents,
+             discount_cents = excluded.discount_cents, commission_basis = excluded.commission_basis,
+             commission_type = excluded.commission_type, commission_value = excluded.commission_value,
+             commission_cents = excluded.commission_cents, commission_gst_cents = excluded.commission_gst_cents,
+             consignor_payable_cents = excluded.consignor_payable_cents, accounting_period = excluded.accounting_period,
+             status = excluded.status, problem = excluded.problem, last_calculated_at = excluded.last_calculated_at
+           WHERE consignment_sales.journal_status = 'unposted'`,
+        )
+        .bind(
+          e.entryKey, e.channel, e.payoutId, e.orderId, e.orderName, e.lineItemId, e.sourceTransactionId, e.sku,
+          e.consignorId, e.kind, e.saleDate, e.grossSaleCents, e.shippingCents, e.discountCents, e.commissionBasis, e.commissionType,
+          e.commissionValue, e.commissionCents, e.commissionGstCents, e.consignorPayableCents, e.accountingPeriod, e.status, e.problem,
+          ts, ts,
+        ),
+    );
+  }
+  const keep = entries.map((e) => e.entryKey);
+  stmts.push(
+    db
+      .prepare(
+        `DELETE FROM consignment_sales WHERE channel = ? AND payout_id = ? AND journal_status = 'unposted'
+           ${keep.length ? `AND entry_key NOT IN (${keep.map(() => "?").join(",")})` : ""}`,
+      )
+      .bind(channel, payoutId, ...keep),
+  );
+  await db.batch(stmts);
+}
+
+export interface ConsignmentRow {
+  entry_key: string;
+  channel: string;
+  payout_id: string;
+  order_name: string | null;
+  sku: string | null;
+  consignor_id: number | null;
+  consignor_name: string | null;
+  kind: "sale" | "refund";
+  sale_date: string;
+  gross_sale_cents: number;
+  shipping_cents: number;
+  commission_type: string | null;
+  commission_value: number | null;
+  commission_cents: number | null;
+  commission_gst_cents: number | null;
+  consignor_payable_cents: number | null;
+  accounting_period: string;
+  status: string;
+  problem: string | null;
+  journal_status: string;
+}
+
+export async function listConsignmentRows(db: D1Database, period?: string): Promise<ConsignmentRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT s.*, c.name AS consignor_name FROM consignment_sales s LEFT JOIN consignors c ON c.id = s.consignor_id
+         ${period ? "WHERE s.accounting_period = ?" : ""} ORDER BY s.accounting_period DESC, c.name, s.sale_date`,
+      )
+      .bind(...(period ? [period] : []))
+      .all<ConsignmentRow>()
+  ).results;
+}
+
 // ------------------------------------------------------------------ reports
 
 export async function saveReport(db: D1Database, r: PayoutReport): Promise<void> {
@@ -396,13 +494,14 @@ export async function reportExists(db: D1Database, channel: string, payoutId: st
 }
 
 /**
- * Delete every payout report and its stored source data, so payouts can be
- * fetched fresh. Stock records, SKU prefix rules, consignors and order facts
- * are kept. Returns how many payouts were removed.
+ * Delete every payout report, its stored source data and the unposted
+ * consignment ledger entries, so payouts can be fetched fresh. Stock records,
+ * SKU prefix rules, consignors, order facts and any posted entries are kept. Returns how many payouts were removed.
  */
 export async function clearPayouts(db: D1Database): Promise<number> {
   const n = (await db.prepare("SELECT count(*) AS n FROM payout_reports").first<{ n: number }>())?.n ?? 0;
   await db.batch([
+    db.prepare("DELETE FROM consignment_sales WHERE journal_status = 'unposted'"),
     db.prepare("DELETE FROM payout_reports"),
     db.prepare("DELETE FROM source_transactions"),
     db.prepare("DELETE FROM source_orders"),
@@ -498,7 +597,7 @@ export async function setStockFact(db: D1Database, sku: string, field: FactField
   if (!existing) {
     const prefixes = (await db.prepare("SELECT * FROM sku_prefix_rules").all<PrefixRow>()).results.sort((a, b) => b.prefix.length - a.prefix.length);
     const p = prefixes.find((x) => s.toUpperCase().startsWith(x.prefix.toUpperCase()));
-    const ownership = field === "ownership" ? value : p?.ownership;
+    const ownership = field === "ownership" ? value : (p?.ownership ?? (OWNED_SKU_CONVENTION.test(s) ? "owned" : undefined));
     if (!ownership) throw new Error(`Record whether ${s} is LOFI-owned or consignment first`);
     await db
       .prepare(
@@ -563,7 +662,7 @@ export async function saveStockFacts(db: D1Database, sku: string, f: StockFacts,
   if (!existing) {
     const prefixes = (await db.prepare("SELECT * FROM sku_prefix_rules").all<PrefixRow>()).results.sort((a, b) => b.prefix.length - a.prefix.length);
     const p = prefixes.find((x) => s.toUpperCase().startsWith(x.prefix.toUpperCase()));
-    const ownership = f.ownership ?? p?.ownership;
+    const ownership = f.ownership ?? p?.ownership ?? (OWNED_SKU_CONVENTION.test(s) ? "owned" : undefined);
     if (!ownership) throw new Error(`Record whether ${s} is LOFI-owned or consignment first`);
     await db
       .prepare(
@@ -675,6 +774,7 @@ export interface ConsignorInput {
   commission_type?: "percent" | "fixed";
   commission_value?: number;
   agreement_type?: "agency" | "153B" | null;
+  notes?: string | null;
 }
 
 export function validateConsignor(c: Partial<ConsignorInput>): string[] {
@@ -715,8 +815,8 @@ export async function addConsignor(db: D1Database, c: ConsignorInput): Promise<n
   const r = await db
     .prepare(
       `INSERT INTO consignors (name, contact, country, australian_gst_registered, australian_gst_basis, abn,
-         commission_type, commission_value, agreement_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         commission_type, commission_value, agreement_type, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     )
     .bind(
       c.name.trim(),
@@ -728,6 +828,7 @@ export async function addConsignor(db: D1Database, c: ConsignorInput): Promise<n
       c.commission_type ?? "percent",
       c.commission_value ?? 0,
       c.agreement_type ?? null,
+      c.notes ?? null,
     )
     .first<{ id: number }>();
   return r!.id;

@@ -44,6 +44,39 @@ Staff fix blocking issues by recording **facts**, never tax codes. The review qu
 - **Ready feedback:** rows that are the only blocker for a payout say so ("Fixing this makes 1 payout ready"). After each save, the message lists which payouts became ready.
 - **Other one-click answers:** destination, consignor Australian GST registration, and agency or 153-B.
 
+## Historical accounting baseline
+
+This is how LOFI accounts for marketplace payouts today. The system reproduces it first, and improves on it only after the accountant signs off.
+
+**Stage 1: payout split (done by hand in QuickBooks until now).** A payout arrives in the bank feed. Staff open the marketplace's payout breakdown, split the bank line into its parts, and give each part a chart-of-accounts category:
+
+| Component | Historical account | Logical category |
+|---|---|---|
+| LOFI-owned sale in Australia | Sales - GST | `SALES_DOMESTIC_GST` |
+| LOFI-owned sale overseas | Overseas Sales - No GST | `SALES_OVERSEAS_NO_GST` |
+| Consignment sale (full amount) | consignment sales, no GST | `CONSIGNMENT_SALES_NO_GST` |
+| eBay / Shopify fees | eBay Fees - No GST, etc. | `EBAY_FEES` / `SHOPIFY_FEES` |
+| Refunds | reverse the original | `REFUND` (records the category it reverses) |
+
+**Stage 2: consignment subledger (a hand-kept spreadsheet until now).** Each consignment sale was entered against that consignor's rule. The spreadsheet worked out LOFI's commission, the GST on the commission, and the amount owed to the consignor. Once per period, LOFI journalled the total commission and its GST into QuickBooks.
+
+**What the system does:**
+- **Stage 1:** `src/accounting/baseline.ts` gives every payout line a logical category from ownership and destination only. Missing facts give `UNCLASSIFIED`, never a guess. The split always adds up to the payout.
+- **Stage 2:** `src/accounting/consignment.ts` builds the subledger (the `consignment_sales` table and the Consignments page) from the same sales, so nothing is re-keyed:
+  - commission is the rule applied to the item price after discounts, excluding shipping
+  - commission GST is 1/11 of the commission, kept separate from the marketplace sale
+  - the consignor is owed the basis minus the commission
+  - totals are shown per month and consignor
+- **QuickBooks:** categories are logical codes, mapped to QuickBooks account IDs in milestone 2. Nothing is posted yet.
+
+**This baseline is LOFI's current operational treatment, not an accountant-approved one.** The draft GST scenarios in `src/rules/` and their sign-off remain authoritative for any change. Both run side by side. Each payout shows the historical split and the draft-scenario classification.
+
+**Design principles:**
+- *A balanced payout is necessary but not sufficient for accounting correctness.* Every line also needs its facts and an approved recipe.
+- *The reconciliation engine stores facts and source transactions. Accounting recipes may change after accountant sign-off without the source data being rebuilt.* Changing a consignor's rule recalculates unposted ledger entries and never touches source sales. Posted entries are frozen.
+
+**Ownership convention:** SKUs beginning `L-` are LOFI-owned. That sets ownership only. The acquisition source, condition and price must still be recorded before a GST scenario (A1/A2/A3) is derived. `LC-` and other L-letter prefixes aren't covered until their meaning is confirmed.
+
 ## Setup
 
 ```bash
