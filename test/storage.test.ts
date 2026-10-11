@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ingestAndReport, rebuildStored } from "../src/index";
-import { addConsignor, setConsignorAgreement, setConsignorGst, setOrderDestination, setStockFact, getReport } from "../src/db";
+import { clearPayouts, addConsignor, setConsignorAgreement, setConsignorGst, setOrderDestination, setStockFact, getReport } from "../src/db";
 import { applyMigrations, ebayFixture, makeTestD1, migrationFiles, newSqlite, seedFixtureFacts, shopifyFixture } from "./helpers";
 
 const count = (sqlite: ReturnType<typeof makeTestD1>["sqlite"], table: string) =>
@@ -181,5 +181,22 @@ describe("consignor facts", () => {
     expect(r.sales.find((x) => x.sku === "RM-256549-001196-140526")!.scenario).toBe("B2_AGENCY");
     expect(r.status).toBe("ready");
     expect(r.provisional).toBe(true);
+  });
+});
+
+describe("clear all payouts", () => {
+  it("removes reports and source data, keeps stock, consignors and facts", async () => {
+    const { d1, sqlite } = makeTestD1();
+    seedFixtureFacts(sqlite);
+    await ingestAndReport(d1, ebayFixture());
+    await ingestAndReport(d1, shopifyFixture());
+    await setOrderDestination(d1, "shopify", "gid://shopify/Order/3260", "AU");
+    expect(await clearPayouts(d1)).toBe(2);
+    for (const t of ["payout_reports", "source_payouts", "source_transactions", "source_orders"]) expect(count(sqlite, t)).toBe(0);
+    expect(count(sqlite, "stock_items")).toBeGreaterThan(0);
+    expect(count(sqlite, "consignors")).toBe(1);
+    expect(count(sqlite, "order_facts")).toBe(1);
+    // Fetching again works normally.
+    expect((await ingestAndReport(d1, ebayFixture())).differenceCents).toBe(0);
   });
 });

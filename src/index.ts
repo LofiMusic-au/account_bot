@@ -6,6 +6,7 @@ import { EbayClient } from "./channels/ebay";
 import { ShopifyClient } from "./channels/shopify";
 import {
   addConsignor,
+  clearPayouts,
   applyOrderFacts,
   FACT_FIELDS,
   getReport,
@@ -46,6 +47,8 @@ export interface Env {
   EBAY_REFRESH_TOKEN?: string;
   LOOKBACK_DAYS: string;
   DASHBOARD_TOKEN?: string;
+  /** "true" shows the "Clear all payouts" button. For local/testing only. */
+  ALLOW_DATA_RESET?: string;
 }
 
 /** Max payouts processed per run, to stay inside Worker subrequest limits. */
@@ -206,8 +209,16 @@ export default {
     const path = url.pathname;
     const msg = url.searchParams.get("msg") ?? undefined;
 
+    const canReset = env.ALLOW_DATA_RESET === "true";
+
     if (req.method === "GET" && path === "/") {
-      return renderIndex(await listReports(env.DB), msg);
+      return renderIndex(await listReports(env.DB), msg, canReset);
+    }
+
+    if (req.method === "POST" && path === "/admin/clear-payouts") {
+      if (!canReset) return new Response("Clearing payouts is switched off (set ALLOW_DATA_RESET=true locally).", { status: 403 });
+      const n = await clearPayouts(env.DB);
+      return redirect(withMsg("/", `Cleared ${n} payout(s) and their stored source data. Stock records, consignors and facts were kept.`));
     }
 
     if (req.method === "POST" && path === "/run") {
@@ -244,7 +255,7 @@ export default {
         if (!r || !r.issues) continue;
         for (const issue of r.issues) if (issue.severity === "blocking") items.push({ report: r, issue });
       }
-      return renderReview(items, consignors, msg);
+      return renderReview(items, consignors, msg, canReset);
     }
 
     // One fact at a time, from the review queue. Facts, never tax codes.

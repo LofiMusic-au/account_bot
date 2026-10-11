@@ -23,3 +23,6 @@ EBAY_REFRESH_TOKEN=
 
 # Optional: protects the local dashboard
 # DASHBOARD_TOKEN=
+
+# Local only: shows a "Clear all payouts" button. Leave unset in production.
+ALLOW_DATA_RESET=true

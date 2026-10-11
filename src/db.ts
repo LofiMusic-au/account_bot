@@ -395,6 +395,22 @@ export async function reportExists(db: D1Database, channel: string, payoutId: st
   return !!row;
 }
 
+/**
+ * Delete every payout report and its stored source data, so payouts can be
+ * fetched fresh. Stock records, SKU prefix rules, consignors and order facts
+ * are kept. Returns how many payouts were removed.
+ */
+export async function clearPayouts(db: D1Database): Promise<number> {
+  const n = (await db.prepare("SELECT count(*) AS n FROM payout_reports").first<{ n: number }>())?.n ?? 0;
+  await db.batch([
+    db.prepare("DELETE FROM payout_reports"),
+    db.prepare("DELETE FROM source_transactions"),
+    db.prepare("DELETE FROM source_orders"),
+    db.prepare("DELETE FROM source_payouts"),
+  ]);
+  return n;
+}
+
 // ------------------------------------------------------------- stock intake
 
 export interface StockInput {
