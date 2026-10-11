@@ -38,6 +38,8 @@ export interface Env {
   SHOPIFY_SHOP: string;
   SHOPIFY_API_VERSION: string;
   SHOPIFY_ADMIN_TOKEN?: string;
+  SHOPIFY_CLIENT_ID?: string;
+  SHOPIFY_CLIENT_SECRET?: string;
   EBAY_MARKETPLACE_ID: string;
   EBAY_CLIENT_ID?: string;
   EBAY_CLIENT_SECRET?: string;
@@ -56,8 +58,14 @@ interface Source {
 
 function sources(env: Env): Source[] {
   const out: Source[] = [];
-  if (env.SHOPIFY_ADMIN_TOKEN) {
-    const c = new ShopifyClient({ shop: env.SHOPIFY_SHOP, token: env.SHOPIFY_ADMIN_TOKEN, apiVersion: env.SHOPIFY_API_VERSION });
+  if (env.SHOPIFY_ADMIN_TOKEN || (env.SHOPIFY_CLIENT_ID && env.SHOPIFY_CLIENT_SECRET)) {
+    const c = new ShopifyClient({
+      shop: env.SHOPIFY_SHOP,
+      token: env.SHOPIFY_ADMIN_TOKEN,
+      clientId: env.SHOPIFY_CLIENT_ID,
+      clientSecret: env.SHOPIFY_CLIENT_SECRET,
+      apiVersion: env.SHOPIFY_API_VERSION,
+    });
     out.push({
       channel: "shopify",
       list: async (since) => (await c.listPayouts(since)).map((p) => ({ id: p.legacyResourceId, load: () => c.fetchPayout(p) })),

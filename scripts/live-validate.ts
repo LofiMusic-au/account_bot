@@ -10,7 +10,7 @@
 //
 // Credentials come from the shell or from .dev.vars (git-ignored), never from tracked files:
 //   eBay:    EBAY_ACCESS_TOKEN, or EBAY_CLIENT_ID + EBAY_CLIENT_SECRET + EBAY_REFRESH_TOKEN
-//   Shopify: SHOPIFY_SHOP + SHOPIFY_ADMIN_TOKEN (+ SHOPIFY_API_VERSION, default 2026-10)
+//   Shopify: SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET (Dev Dashboard app), or SHOPIFY_ADMIN_TOKEN
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -254,8 +254,14 @@ async function ebay() {
 // ------------------------------------------------------------------- Shopify
 
 async function shopify() {
-  if (!env.SHOPIFY_SHOP || !env.SHOPIFY_ADMIN_TOKEN) throw new Error("Set SHOPIFY_SHOP and SHOPIFY_ADMIN_TOKEN");
-  const client = new ShopifyClient({ shop: env.SHOPIFY_SHOP, token: env.SHOPIFY_ADMIN_TOKEN, apiVersion: env.SHOPIFY_API_VERSION ?? "2026-10" });
+  if (!env.SHOPIFY_SHOP) throw new Error("Set SHOPIFY_SHOP (or keep it in wrangler.toml)");
+  const client = new ShopifyClient({
+    shop: env.SHOPIFY_SHOP,
+    token: env.SHOPIFY_ADMIN_TOKEN,
+    clientId: env.SHOPIFY_CLIENT_ID,
+    clientSecret: env.SHOPIFY_CLIENT_SECRET,
+    apiVersion: env.SHOPIFY_API_VERSION ?? "2026-10",
+  });
   const since = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
   const payouts = (await client.listPayouts(since)).sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));
   if (!arg || arg === "--scan") {

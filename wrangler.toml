@@ -19,7 +19,9 @@ EBAY_MARKETPLACE_ID = "EBAY_AU"
 LOOKBACK_DAYS = "14"
 
 # Secrets (set with `wrangler secret put <NAME>`):
-#   SHOPIFY_ADMIN_TOKEN   custom app token: read_orders + read_shopify_payments (or read_shopify_payments_payouts / _accounts)
+#   SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET   Dev Dashboard app (client credentials grant):
+#                         read_orders, read_shopify_payments_payouts, read_shopify_payments_accounts
+#                         (or SHOPIFY_ADMIN_TOKEN for an older admin-created app)
 #   EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_REFRESH_TOKEN
 #                         scopes: sell.finances, sell.fulfillment.readonly
 #   DASHBOARD_TOKEN       shared secret for the dashboard (or put the Worker behind Cloudflare Access)

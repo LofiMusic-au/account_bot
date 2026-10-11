@@ -264,3 +264,30 @@ describe("both channels produce the same model", () => {
     expect(keys(e.fees[0]!.source)).toEqual(keys(s.fees[0]!.source));
   });
 });
+
+describe("Shopify authentication", () => {
+  it("swaps Dev Dashboard client credentials for a token and reuses it", async () => {
+    const { ShopifyClient } = await import("../src/channels/shopify");
+    const calls: { url: string; body: string; token: string | null }[] = [];
+    const fake = (async (url: string, init: RequestInit) => {
+      calls.push({ url, body: String(init.body ?? ""), token: new Headers(init.headers).get("X-Shopify-Access-Token") });
+      if (url.endsWith("/admin/oauth/access_token")) return Response.json({ access_token: "minted", expires_in: 86399 });
+      return Response.json({ data: { ok: true } });
+    }) as unknown as typeof fetch;
+    const c = new ShopifyClient({ shop: "lofi-music.myshopify.com", clientId: "id", clientSecret: "secret", apiVersion: "2026-10", fetch: fake });
+    await c.gql("{ shop { name } }", {});
+    await c.gql("{ shop { name } }", {});
+    expect(calls.map((x) => x.url)).toEqual([
+      "https://lofi-music.myshopify.com/admin/oauth/access_token",
+      "https://lofi-music.myshopify.com/admin/api/2026-10/graphql.json",
+      "https://lofi-music.myshopify.com/admin/api/2026-10/graphql.json",
+    ]);
+    expect(new URLSearchParams(calls[0]!.body).get("grant_type")).toBe("client_credentials");
+    expect(calls[1]!.token).toBe("minted");
+  });
+
+  it("refuses to start with no credentials", async () => {
+    const { ShopifyClient } = await import("../src/channels/shopify");
+    expect(() => new ShopifyClient({ shop: "x.myshopify.com", apiVersion: "2026-10" })).toThrow(/SHOPIFY_CLIENT_ID/);
+  });
+});

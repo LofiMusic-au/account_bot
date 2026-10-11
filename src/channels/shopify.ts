@@ -11,7 +11,15 @@ import type { Adjustment, Fee, FeeCategory, Issue, NormalisedPayout, OrderSale, 
 
 export interface ShopifyConfig {
   shop: string; // xxx.myshopify.com
-  token: string;
+  /** A ready Admin API token (legacy admin-created custom apps, shpat_…). */
+  token?: string;
+  /**
+   * Dev Dashboard app credentials. Exchanged for a 24-hour access token with
+   * the client credentials grant (apps used only on stores in LOFI's own
+   * organization). Used when `token` isn't set.
+   */
+  clientId?: string;
+  clientSecret?: string;
   apiVersion: string;
   fetch?: typeof fetch;
 }
@@ -112,14 +120,37 @@ const ORDERS_QUERY = `query Orders($ids: [ID!]!) {
 export class ShopifyClient {
   /** Deprecations Shopify reported for our queries (X-Shopify-API-Deprecated-Reason). */
   readonly deprecations = new Set<string>();
-  constructor(private cfg: ShopifyConfig) {}
+  private minted: { value: string; expires: number } | null = null;
+  constructor(private cfg: ShopifyConfig) {
+    if (!cfg.token && !(cfg.clientId && cfg.clientSecret)) {
+      throw new Error("Shopify needs SHOPIFY_ADMIN_TOKEN, or SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET");
+    }
+  }
+
+  /** The Admin API token: the configured one, or a client-credentials token refreshed before it expires. */
+  async accessToken(): Promise<string> {
+    if (this.cfg.token) return this.cfg.token;
+    if (this.minted && this.minted.expires > Date.now() + 5 * 60_000) return this.minted.value;
+    const f = this.cfg.fetch ?? fetch;
+    const res = await f(`https://${this.cfg.shop}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams({ grant_type: "client_credentials", client_id: this.cfg.clientId!, client_secret: this.cfg.clientSecret! }),
+    });
+    // The response body can echo request details; never include it with the secret in an error.
+    if (!res.ok) throw new Error(`Shopify token request ${res.status}: ${(await res.text()).replace(/\s+/g, " ").slice(0, 200)}`);
+    const body = (await res.json()) as { access_token?: string; expires_in?: number; scope?: string };
+    if (!body.access_token) throw new Error("Shopify token request returned no access_token");
+    this.minted = { value: body.access_token, expires: Date.now() + (body.expires_in ?? 86_399) * 1000 };
+    return body.access_token;
+  }
 
   async gql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
     const f = this.cfg.fetch ?? fetch;
     for (let attempt = 0; ; attempt++) {
       const res = await f(`https://${this.cfg.shop}/admin/api/${this.cfg.apiVersion}/graphql.json`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": this.cfg.token },
+        headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": await this.accessToken() },
         body: JSON.stringify({ query, variables }),
       });
       if (res.status === 429 && attempt < 4) {

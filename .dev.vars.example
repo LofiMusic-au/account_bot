@@ -2,8 +2,13 @@
 # and by `npm run live:validate`. Production secrets go in with
 # `npx wrangler secret put <NAME>` instead; never commit real values.
 
-# Shopify custom app (Admin API): read_orders, read_shopify_payments
-SHOPIFY_ADMIN_TOKEN=
+# Shopify app from the Dev Dashboard (App settings > Credentials), installed on
+# the store with read_orders, read_shopify_payments_payouts and
+# read_shopify_payments_accounts. The code swaps these for a 24-hour token.
+SHOPIFY_CLIENT_ID=
+SHOPIFY_CLIENT_SECRET=
+# Only for an older admin-created custom app that shows a shpat_ token:
+# SHOPIFY_ADMIN_TOKEN=
 
 # eBay developer app + user refresh token: sell.finances, sell.fulfillment.readonly
 EBAY_CLIENT_ID=

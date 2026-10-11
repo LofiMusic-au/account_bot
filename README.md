@@ -39,13 +39,13 @@ Staff fix blocking issues by recording **facts**, never tax codes. The review qu
 npm install
 npx wrangler d1 create lofi-recon          # paste the id into wrangler.toml
 npm run db:migrate:remote
-npx wrangler secret put SHOPIFY_ADMIN_TOKEN
+npx wrangler secret put SHOPIFY_CLIENT_ID     # and SHOPIFY_CLIENT_SECRET (Dev Dashboard app)
 npx wrangler secret put EBAY_CLIENT_ID      # and EBAY_CLIENT_SECRET, EBAY_REFRESH_TOKEN
 npx wrangler secret put DASHBOARD_TOKEN     # or put the Worker behind Cloudflare Access (preferred)
 npm run deploy
 ```
 
-- **Shopify:** a custom app with `read_orders` and `read_shopify_payments`. Shopify's validator also lists `read_shopify_payments_accounts` for `shopifyPaymentsAccount`. The Admin API version is pinned to `2026-10` in `wrangler.toml`.
+- **Shopify:** an app created in Shopify's Dev Dashboard and installed on the store, with `read_orders`, `read_shopify_payments_payouts` and `read_shopify_payments_accounts`. The Worker swaps its client ID and secret for a 24-hour token (client credentials grant). An older admin-created app's `shpat_` token still works through `SHOPIFY_ADMIN_TOKEN`. The Admin API version is pinned to `2026-10` in `wrangler.toml`.
 - **eBay:** a developer app and a user refresh token for LOFI's seller account, with `sell.finances` and `sell.fulfillment.readonly`. The code requests exactly these two scopes when refreshing its token. The existing token in the Migrator project reads Finances but is rejected by the Fulfillment API.
 - Secrets live only in Wrangler secrets or a local `.dev.vars`. Both are git-ignored, along with `.env` files and local databases.
 
