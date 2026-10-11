@@ -31,7 +31,18 @@ Shopify Payments + Orders (GQL) ─┘          │
 | Blocking | unknown SKU or stock record, unknown acquisition source, condition, consignor or consignor GST status, unknown destination, unsupported transaction type, dispute, sale that doesn't match its order, payout mismatch, transaction already in another payout | Payout is `needs_review` (or `unbalanced`) and appears in the review queue |
 | Awaiting sign-off | scenario not signed off, fee GST treatment pending, foreign-currency policy pending | Payout is marked **Provisional**; staff can't clear it, only the accountant can |
 
-Staff fix blocking issues by recording **facts**, never tax codes. The review queue offers one-click answers, such as ownership (LOFI or consignment), acquisition source, condition, consignor GST registration, and destination for orders without a shipping address. Each answer is saved against the SKU, consignor or order. Every open payout is then rebuilt from stored data without calling the platforms again.
+Staff fix blocking issues by recording **facts**, never tax codes. The review queue is a fact-correction console:
+
+- **Summary:** counts of payouts (ready, needs review, unbalanced) and problems by group. The groups are facts to record, integration problems, and items for the accountant.
+- **One row per SKU:** an inline form records ownership, acquisition source, condition, purchase price, consignor and commission in one save. It is prefilled from the current record or prefix rule.
+- **Prefix rules:** the same form can create a **SKU prefix rule**, such as everything starting with `L-`. Safety checks:
+  - The prefix must be at least 2 characters and the start of that SKU.
+  - An existing rule is never overwritten without ticking "replace".
+  - Rules never set purchase prices.
+  - An item's own record always wins over a rule.
+- **No SKU on eBay:** the line is keyed on its listing ID (`EBAY-ITEM-<id>`), so it can be recorded like any SKU.
+- **Ready feedback:** rows that are the only blocker for a payout say so ("Fixing this makes 1 payout ready"). After each save, the message lists which payouts became ready.
+- **Other one-click answers:** destination, consignor Australian GST registration, and agency or 153-B.
 
 ## Setup
 

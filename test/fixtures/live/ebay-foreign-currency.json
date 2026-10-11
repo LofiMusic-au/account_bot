@@ -629,6 +629,7 @@
    "lineItems": [
     {
      "lineItemId": "LIVE-LINE-1",
+     "legacyItemId": "LIVE-LISTING-1",
      "sku": "XFRMR21/10/19",
      "title": "Roland Juno 106 60 6 Synthesiser Power Transformer Replacement",
      "quantity": 1,
@@ -678,6 +679,7 @@
    "lineItems": [
     {
      "lineItemId": "LIVE-LINE-2",
+     "legacyItemId": "LIVE-LISTING-2",
      "sku": "Technics feet-210526",
      "title": "Genuine Technics SL-1210/SL-1200 MK2/MK3/MK4/MK5/MK6 Feet Foot Insulator",
      "quantity": 1,
@@ -727,6 +729,7 @@
    "lineItems": [
     {
      "lineItemId": "LIVE-LINE-3",
+     "legacyItemId": "LIVE-LISTING-3",
      "title": "Tascam Portastudio 244 - Klemmrolle & Umlenkreifenersatz",
      "quantity": 1,
      "lineItemCost": {
@@ -775,6 +778,7 @@
    "lineItems": [
     {
      "lineItemId": "LIVE-LINE-4",
+     "legacyItemId": "LIVE-LISTING-4",
      "sku": "L-SPX-21513-190326",
      "title": "Yamaha SPX90 Professional Programmable Multi Effects Processor 1U Rack - 100V",
      "quantity": 1,
@@ -824,6 +828,7 @@
    "lineItems": [
     {
      "lineItemId": "LIVE-LINE-5",
+     "legacyItemId": "LIVE-LISTING-5",
      "sku": "Yam-Rev7-12335-bf2-145460-201125",
      "title": "Yamaha Rev-7 Vintage Programable Stereo 80's Digital Reverberator - 100V",
      "quantity": 1,
@@ -873,6 +878,7 @@
    "lineItems": [
     {
      "lineItemId": "LIVE-LINE-6",
+     "legacyItemId": "LIVE-LISTING-6",
      "sku": "TascamPORTA2_Belt",
      "title": "Tascam Porta Two Ministudio Cassette Portastudio Service Spare Parts Belt Kit ",
      "quantity": 1,
@@ -926,6 +932,7 @@
    "lineItems": [
     {
      "lineItemId": "LIVE-LINE-8",
+     "legacyItemId": "LIVE-LISTING-7",
      "sku": "MR50-ULH370-2926",
      "title": "Sony ULH 370 Low Noise Hi-Output 7 Inch Reel to Reel Tape - NOS ULH-72-370",
      "quantity": 1,
@@ -942,6 +949,7 @@
     },
     {
      "lineItemId": "LIVE-LINE-7",
+     "legacyItemId": "LIVE-LISTING-8",
      "sku": "MR50-UD790B-1926",
      "title": "Hitachi UD7-90B Ultra Dynamic Hi-Output Extended Range 7 Inch Reel Tape - NOS",
      "quantity": 2,
@@ -995,6 +1003,7 @@
    "lineItems": [
     {
      "lineItemId": "LIVE-LINE-9",
+     "legacyItemId": "LIVE-LISTING-9",
      "sku": "L-00013166-090726",
      "title": "Lexicon MX300 24-Bit Stereo Reverb Effects Processor - 100-120V",
      "quantity": 1,
@@ -1044,6 +1053,7 @@
    "lineItems": [
     {
      "lineItemId": "LIVE-LINE-10",
+     "legacyItemId": "LIVE-LISTING-10",
      "sku": "100W-stepdown-11422",
      "title": "240V - 100V 100W Isolated Step-Down Transformer Use Japanese Gear In Australia  ",
      "quantity": 1,
@@ -1093,6 +1103,7 @@
    "lineItems": [
     {
      "lineItemId": "LIVE-LINE-11",
+     "legacyItemId": "LIVE-LISTING-11",
      "sku": "A_C-PL-7L5315-201125",
      "title": "Pioneer PL-7L Vintage 80s Quartz Direct Drive Turntable w/ Ceramic Tonearm 100V",
      "quantity": 1,
@@ -1142,6 +1153,7 @@
    "lineItems": [
     {
      "lineItemId": "LIVE-LINE-12",
+     "legacyItemId": "LIVE-LISTING-12",
      "sku": "Tascam234_ServiceKit-16123",
      "title": "Tascam Portastudio 234 Service Kit - Belt Pinch Roller & Idler Tyre Replacement",
      "quantity": 1,

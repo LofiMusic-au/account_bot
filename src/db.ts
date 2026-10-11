@@ -525,6 +525,130 @@ export async function setStockFact(db: D1Database, sku: string, field: FactField
 }
 
 /** Record a consignor's Australian GST registration (by a person). */
+/** Facts staff can record for a SKU in one go from the review queue. Absent = leave unchanged. */
+export interface StockFacts {
+  ownership?: Ownership;
+  acquired_from?: AcquiredFrom;
+  item_condition?: Condition;
+  purchase_cents?: number;
+  consignor_id?: number;
+  commission_value?: number;
+}
+
+export function validateFacts(f: StockFacts): string[] {
+  const errs: string[] = [];
+  if (f.ownership && f.ownership !== "owned" && f.ownership !== "consignment") errs.push("ownership must be LOFI or consignment");
+  if (f.acquired_from && !ACQUIRED_FROM_VALUES.includes(f.acquired_from)) errs.push("unknown acquisition source");
+  if (f.item_condition && !CONDITION_VALUES.includes(f.item_condition)) errs.push("condition must be new or second-hand");
+  if (f.purchase_cents !== undefined && (!Number.isInteger(f.purchase_cents) || f.purchase_cents < 0)) errs.push("purchase price isn't a valid amount");
+  if (f.consignor_id !== undefined && !Number.isInteger(f.consignor_id)) errs.push("unknown consignor");
+  if (f.commission_value !== undefined && (!Number.isFinite(f.commission_value) || f.commission_value < 0 || f.commission_value > 100))
+    errs.push("commission must be a percentage between 0 and 100");
+  if (f.ownership === "owned" && f.consignor_id !== undefined) errs.push("a LOFI-owned item can't have a consignor");
+  if (f.ownership === "consignment" && f.acquired_from !== undefined) errs.push("acquisition source only applies to LOFI-owned stock");
+  return errs;
+}
+
+/**
+ * Record several facts for one SKU. Fields left out are kept. A SKU with no
+ * record of its own starts from its SKU prefix default (if any) so no prefix
+ * fact is lost; ownership must be known one way or the other.
+ */
+export async function saveStockFacts(db: D1Database, sku: string, f: StockFacts, title?: string): Promise<void> {
+  const errs = validateFacts(f);
+  if (errs.length) throw new Error(errs.join("; "));
+  const s = sku.trim();
+  if (!s) throw new Error("SKU is required");
+  const existing = await db.prepare("SELECT sku FROM stock_items WHERE upper(sku) = upper(?)").bind(s).first<{ sku: string }>();
+  if (!existing) {
+    const prefixes = (await db.prepare("SELECT * FROM sku_prefix_rules").all<PrefixRow>()).results.sort((a, b) => b.prefix.length - a.prefix.length);
+    const p = prefixes.find((x) => s.toUpperCase().startsWith(x.prefix.toUpperCase()));
+    const ownership = f.ownership ?? p?.ownership;
+    if (!ownership) throw new Error(`Record whether ${s} is LOFI-owned or consignment first`);
+    await db
+      .prepare(
+        `INSERT INTO stock_items (sku, title, ownership, acquired_from, item_condition, consignor_id, commission_type, commission_value, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        s,
+        title ?? null,
+        ownership,
+        p?.acquired_from ?? null,
+        p?.item_condition ?? null,
+        p?.consignor_id ?? null,
+        p?.commission_type ?? null,
+        p?.commission_value ?? null,
+        p ? `Created from SKU prefix ${p.prefix} via review queue` : "Created via review queue",
+      )
+      .run();
+  }
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  const set = (col: string, v: unknown) => {
+    sets.push(`${col} = ?`);
+    vals.push(v);
+  };
+  if (f.ownership) set("ownership", f.ownership);
+  if (f.ownership === "consignment") set("acquired_from", null);
+  if (f.ownership === "owned") set("consignor_id", null);
+  if (f.acquired_from) set("acquired_from", f.acquired_from);
+  if (f.item_condition) set("item_condition", f.item_condition);
+  if (f.purchase_cents !== undefined) set("purchase_cents", f.purchase_cents);
+  if (f.consignor_id !== undefined) set("consignor_id", f.consignor_id);
+  if (f.commission_value !== undefined) {
+    set("commission_type", "percent");
+    set("commission_value", f.commission_value);
+  }
+  if (title && !existing) set("title", title);
+  if (!sets.length) return;
+  await db
+    .prepare(`UPDATE stock_items SET ${sets.join(", ")}, updated_at = datetime('now') WHERE upper(sku) = upper(?)`)
+    .bind(...vals, s)
+    .run();
+}
+
+export interface PrefixRuleInput {
+  prefix: string;
+  ownership: Ownership;
+  acquired_from?: AcquiredFrom;
+  item_condition?: Condition;
+  consignor_id?: number;
+  description?: string;
+}
+
+/**
+ * Create a SKU prefix default. Safety rules: at least 2 characters, it must be
+ * a prefix of the SKU it was created from, and an existing rule for the same
+ * prefix is only replaced when `replace` is set. Individual stock records
+ * always win over prefix rules, and purchase prices are never set by prefix.
+ */
+export async function savePrefixRule(db: D1Database, r: PrefixRuleInput, fromSku: string, replace = false): Promise<"created" | "replaced"> {
+  const prefix = r.prefix.trim();
+  if (prefix.length < 2) throw new Error("A prefix must be at least 2 characters");
+  if (!fromSku.trim().toUpperCase().startsWith(prefix.toUpperCase())) throw new Error(`"${prefix}" isn't the start of ${fromSku}`);
+  const errs = validateFacts({ ownership: r.ownership, acquired_from: r.acquired_from, item_condition: r.item_condition, consignor_id: r.consignor_id });
+  if (!r.ownership) errs.push("a prefix rule needs ownership");
+  if (errs.length) throw new Error(errs.join("; "));
+  const existing = await db.prepare("SELECT prefix FROM sku_prefix_rules WHERE upper(prefix) = upper(?)").bind(prefix).first<{ prefix: string }>();
+  if (existing && !replace) throw new Error(`A rule for "${existing.prefix}" already exists; tick "replace" to overwrite it`);
+  if (existing) await db.prepare("DELETE FROM sku_prefix_rules WHERE upper(prefix) = upper(?)").bind(prefix).run();
+  await db
+    .prepare(
+      `INSERT INTO sku_prefix_rules (prefix, description, ownership, acquired_from, item_condition, consignor_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(prefix, r.description ?? `Created from ${fromSku} via review queue`, r.ownership, r.acquired_from ?? null, r.item_condition ?? null, r.consignor_id ?? null)
+    .run();
+  return existing ? "replaced" : "created";
+}
+
+/** Stock rows and prefix rules for prefilling the review queue. */
+export async function loadFactsFor(db: D1Database, skus: string[]): Promise<{ items: Map<string, StockRow>; prefixes: PrefixRow[] }> {
+  const rows = await inChunks<StockRow>(db, (q) => `SELECT * FROM stock_items WHERE upper(sku) IN (${q})`, [...new Set(skus.map((x) => x.trim().toUpperCase()))]);
+  const prefixes = (await db.prepare("SELECT * FROM sku_prefix_rules").all<PrefixRow>()).results;
+  return { items: new Map(rows.map((r) => [r.sku.toUpperCase(), r])), prefixes };
+}
+
 export async function setConsignorGst(db: D1Database, id: number, registered: boolean): Promise<void> {
   await db
     .prepare("UPDATE consignors SET australian_gst_registered = ?, australian_gst_basis = 'recorded' WHERE id = ?")

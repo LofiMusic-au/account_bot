@@ -12,11 +12,14 @@ import {
   getReport,
   ingestPayout,
   listReports,
+  loadFactsFor,
   loadOrderFacts,
   loadResolver,
   loadStoredPayout,
   reportExists,
+  savePrefixRule,
   saveReport,
+  saveStockFacts,
   setConsignorAgreement,
   setConsignorGst,
   validateConsignor,
@@ -27,6 +30,7 @@ import {
   upsertStock,
   validateStock,
   type FactField,
+  type StockFacts,
   type StockInput,
 } from "./db";
 import { toCents } from "./money";
@@ -111,13 +115,27 @@ export async function rebuildStored(db: D1Database, channel: string, payoutId: s
 }
 
 /** Rebuild every recent payout that isn't ready, so a corrected fact shows up everywhere. */
-async function rebuildOpen(db: D1Database): Promise<number> {
-  let n = 0;
+async function rebuildOpen(db: D1Database): Promise<{ rebuilt: number; nowReady: string[]; stillOpen: number }> {
+  let rebuilt = 0;
+  const nowReady: string[] = [];
+  let stillOpen = 0;
   for (const r of await listReports(db, 60)) {
     if (r.status === "ready") continue;
-    if (await rebuildStored(db, r.channel, r.payout_id)) n++;
+    const after = await rebuildStored(db, r.channel, r.payout_id);
+    if (!after) continue;
+    rebuilt++;
+    if (after.status === "ready") nowReady.push(`${r.channel === "ebay" ? "eBay" : "Shopify"} ${r.payout_date} (${r.payout_id})`);
+    else stillOpen++;
   }
-  return n;
+  return { rebuilt, nowReady, stillOpen };
+}
+
+/** The message shown after a fact is saved: what it changed. */
+function afterSave(what: string, r: { nowReady: string[]; stillOpen: number }): string {
+  const ready = r.nowReady.length
+    ? ` Now ready (provisional): ${r.nowReady.join(", ")}.`
+    : " No payout became ready yet.";
+  return `${what}.${ready} ${r.stillOpen} payout(s) still need review.`;
 }
 
 /** Fetch payouts not yet reported. `only` limits to one payout (re-fetch). */
@@ -253,14 +271,47 @@ export default {
 
     if (req.method === "GET" && path === "/review") {
       const rows = await listReports(env.DB, 60, channelFilter);
-      const items: ReviewItem[] = [];
-      const consignors = new Map((await consignorList(env)).map((c) => [c.id, c.name]));
-      for (const row of rows.filter((x) => x.status !== "ready")) {
+      const reports: PayoutReport[] = [];
+      for (const row of rows) {
         const r = await getReport(env.DB, row.channel, row.payout_id);
-        if (!r || !r.issues) continue;
-        for (const issue of r.issues) if (issue.severity === "blocking") items.push({ report: r, issue });
+        if (r && r.issues) reports.push(r);
       }
-      return renderReview(items, consignors, msg, canReset, channelFilter);
+      const skus = reports.flatMap((r) => r.issues.filter((i) => i.sku && i.severity === "blocking").map((i) => i.sku!));
+      const facts = await loadFactsFor(env.DB, skus);
+      const consignors = (await env.DB.prepare("SELECT id, name, country, australian_gst_registered, agreement_type FROM consignors ORDER BY name").all<ConsignorOption>()).results;
+      return renderReview({ reports, consignors, items: facts.items, prefixes: facts.prefixes }, msg, canReset, channelFilter);
+    }
+
+    // Several facts for one SKU at once (and optionally a SKU prefix rule).
+    if (req.method === "POST" && path === "/facts/item") {
+      const f = await form(req);
+      const back = safeReturn(f.return);
+      try {
+        if (!f.sku) throw new Error("SKU is required");
+        const facts: StockFacts = {};
+        if (f.ownership) facts.ownership = f.ownership as StockFacts["ownership"];
+        if (f.acquired_from && facts.ownership !== "consignment") facts.acquired_from = f.acquired_from as StockFacts["acquired_from"];
+        if (f.item_condition) facts.item_condition = f.item_condition as StockFacts["item_condition"];
+        if (f.purchase_aud) facts.purchase_cents = toCents(f.purchase_aud.replace(/[$,]/g, ""));
+        if (f.consignor_id && facts.ownership !== "owned") facts.consignor_id = Number(f.consignor_id);
+        if (f.commission) facts.commission_value = Number(f.commission);
+        let ruleMsg = "";
+        if (f.make_prefix === "1") {
+          const ownership = facts.ownership;
+          if (!ownership) throw new Error("Choose ownership before making a prefix rule");
+          const result = await savePrefixRule(
+            env.DB,
+            { prefix: f.prefix ?? "", ownership, acquired_from: facts.acquired_from, item_condition: facts.item_condition, consignor_id: facts.consignor_id },
+            f.sku,
+            f.replace === "1",
+          );
+          ruleMsg = ` and ${result} the rule for SKUs starting with "${f.prefix}"`;
+        }
+        await saveStockFacts(env.DB, f.sku, facts, f.title);
+        return redirect(withMsg(back, afterSave(`Saved ${f.sku}${ruleMsg}`, await rebuildOpen(env.DB))));
+      } catch (e) {
+        return redirect(withMsg(back, `Not saved: ${(e as Error).message}`));
+      }
     }
 
     // One fact at a time, from the review queue. Facts, never tax codes.
@@ -274,8 +325,7 @@ export default {
       } catch (e) {
         return redirect(withMsg(back, (e as Error).message));
       }
-      const n = await rebuildOpen(env.DB);
-      return redirect(withMsg(back, `Saved ${f.field.replace("_", " ")} for ${f.sku}; ${n} open payout(s) rebuilt`));
+      return redirect(withMsg(back, afterSave(`Saved ${f.field.replace("_", " ")} for ${f.sku}`, await rebuildOpen(env.DB))));
     }
 
     if (req.method === "POST" && path === "/facts/consignor") {
@@ -290,8 +340,7 @@ export default {
       } else {
         return redirect(withMsg(back, "Choose an answer"));
       }
-      const n = await rebuildOpen(env.DB);
-      return redirect(withMsg(back, `Saved consignor fact; ${n} open payout(s) rebuilt`));
+      return redirect(withMsg(back, afterSave("Saved consignor fact", await rebuildOpen(env.DB))));
     }
 
     if (req.method === "POST" && path === "/facts/order") {
@@ -303,8 +352,7 @@ export default {
       } catch (e) {
         return redirect(withMsg(back, (e as Error).message));
       }
-      const n = await rebuildOpen(env.DB);
-      return redirect(withMsg(back, `Saved destination ${f.country.toUpperCase()}; ${n} open payout(s) rebuilt`));
+      return redirect(withMsg(back, afterSave(`Saved destination ${f.country.toUpperCase()}`, await rebuildOpen(env.DB))));
     }
 
     if (req.method === "GET" && path === "/stock/new") {
@@ -342,8 +390,7 @@ export default {
       const errs = validateStock(input);
       if (errs.length) return renderStockForm({ sku: f.sku, title: f.title }, await consignorList(env), errs.join("; "));
       await upsertStock(env.DB, input as StockInput);
-      const n = await rebuildOpen(env.DB);
-      return redirect(withMsg("/stock/new", `Saved ${input.sku}; ${n} open payout(s) rebuilt`));
+      return redirect(withMsg("/stock/new", afterSave(`Saved ${input.sku}`, await rebuildOpen(env.DB))));
     }
 
     if (req.method === "POST" && path === "/consignors") {

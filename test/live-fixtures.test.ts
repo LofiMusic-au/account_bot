@@ -128,9 +128,15 @@ describe("live eBay order details (Fulfillment API)", () => {
     expect(r.refunds.reduce((a, l) => a + l.grossCents, 0)).toBe(-2590);
   });
 
-  it("a listing without a SKU on eBay is flagged, not guessed", () => {
-    const r = buildReport(live("ebay-foreign-currency"), () => null);
-    expect(r.issues.filter((i) => i.code === "unknown_sku")).toHaveLength(1);
+  it("a listing without a SKU on eBay is keyed on its listing ID, and still needs facts", () => {
+    const p = live("ebay-foreign-currency");
+    const line = p.sales.flatMap((s) => s.lines).find((l) => l.skuFromListing)!;
+    expect(line.sku).toMatch(/^EBAY-ITEM-LIVE-LISTING-\d+$/);
+    const r = buildReport(p, () => null);
+    expect(r.issues.filter((i) => i.code === "unknown_sku")).toHaveLength(0);
+    const issue = r.issues.find((i) => i.sku === line.sku)!;
+    expect(issue.code).toBe("unknown_stock_record");
+    expect(issue.message).toMatch(/No SKU on the eBay listing/);
   });
 });
 

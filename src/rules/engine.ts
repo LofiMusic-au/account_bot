@@ -375,15 +375,22 @@ export function classifyLine(order: OrderSale, line: SaleLine, item: StockItem |
   }
   if (!line.sku) return review(order, line, "unknown_sku", "Line has no SKU", ["sku = none"]);
   if (!item) {
-    return review(order, line, "unknown_stock_record", `No stock record or SKU prefix rule for SKU "${line.sku}"`, [
-      `sku = ${line.sku}`,
-      "stock record = none",
-    ]);
+    return review(
+      order,
+      line,
+      "unknown_stock_record",
+      line.skuFromListing
+        ? `No SKU on the eBay listing, and no facts recorded for listing ${line.sku}`
+        : `No stock record or SKU prefix rule for SKU "${line.sku}"`,
+      [line.skuFromListing ? `sku = none; eBay listing ${line.sku}` : `sku = ${line.sku}`, "stock record = none"],
+    );
   }
   const flags: string[] = [];
   const why: string[] = [
+    ...(line.skuFromListing ? [`sku = none on the listing; keyed on eBay listing ID ${line.sku}`] : []),
     item.source === "item" ? `stock record ${item.sku}` : `SKU prefix rule "${item.prefix ?? "?"}" (no individual record)`,
   ];
+  if (line.skuFromListing) flags.push("No SKU on the eBay listing: facts are recorded against the listing ID");
   if (item.source === "prefix") flags.push("Classified from SKU prefix default, not an individual stock record");
 
   let scenario: ScenarioCode;

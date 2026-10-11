@@ -83,6 +83,9 @@ form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
 label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}
 input,select{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 input.cc{width:4.5em}
+form.factform{display:flex;flex-wrap:wrap;gap:6px;align-items:center}form.factform select{max-width:13em}
+input.money{width:7em}input.pct{width:5em}details.prefix{flex-basis:100%}details.prefix summary{font-size:12px}
+label.inline{display:inline-flex;flex-direction:row;align-items:center;gap:6px;color:var(--fg)}
 </style></head><body>
 <header><b>LOFI payout reconciliation</b><a href="/">Payouts</a><a href="/review">Review queue</a><a href="/stock/new">Add stock record</a>
 <span class="muted" style="margin-left:auto">Report-only · nothing is posted to QuickBooks</span></header>
@@ -314,36 +317,212 @@ export interface ReviewItem {
   issue: Issue;
 }
 
-export function renderReview(items: ReviewItem[], consignors: Map<number, string>, msg?: string, canReset = false, channel?: Channel): Response {
+/** Which part of the queue an issue belongs to. */
+export type IssueGroup = "facts" | "integration" | "accounting";
+const FACT_CODES = new Set([
+  "unknown_sku",
+  "unknown_stock_record",
+  "unknown_ownership",
+  "unknown_acquisition_source",
+  "unknown_condition",
+  "unknown_supplier_gst_status",
+  "unknown_consignor",
+  "unknown_consignor_gst_status",
+  "unknown_consignor_agreement",
+  "unknown_commission",
+  "unknown_purchase_price",
+  "unknown_destination",
+]);
+const ACCOUNTING_CODES = new Set(["unresolved_scenario", "manual_review", "dispute"]);
+export const issueGroup = (i: Issue): IssueGroup =>
+  FACT_CODES.has(i.code) ? "facts" : ACCOUNTING_CODES.has(i.code) ? "accounting" : "integration";
+/** SKU-level fact problems are fixed with one form per SKU. */
+const SKU_FORM_CODES = new Set(["unknown_stock_record", "unknown_acquisition_source", "unknown_condition", "unknown_purchase_price", "unknown_consignor", "unknown_commission"]);
+
+/** A sensible prefix to suggest for a SKU: up to and including its first separator. */
+export function suggestPrefix(sku: string): string {
+  const m = /^(.+?[-_/])./.exec(sku);
+  return m && m[1]!.length >= 2 ? m[1]! : "";
+}
+
+export interface ReviewData {
+  /** Every recent report for the selected platform(s), for the summary. */
+  reports: PayoutReport[];
+  consignors: ConsignorOption[];
+  /** Current facts for SKUs in the queue, keyed by upper-case SKU. */
+  items: Map<string, StockRowLike>;
+  prefixes: PrefixRowLike[];
+}
+export interface StockRowLike {
+  sku: string;
+  ownership: string;
+  acquired_from: string | null;
+  item_condition?: string | null;
+  purchase_cents: number | null;
+  consignor_id: number | null;
+  commission_value: number | null;
+}
+export interface PrefixRowLike {
+  prefix: string;
+  ownership: string;
+  acquired_from: string | null;
+  item_condition?: string | null;
+  consignor_id: number | null;
+}
+
+interface Group {
+  key: string;
+  group: IssueGroup;
+  issues: Issue[];
+  sku: string | null;
+  title: string | null;
+  channel: string;
+  reports: PayoutReport[];
+  cents: number;
+}
+
+const groupKey = (r: PayoutReport, i: Issue) => {
+  if (i.sku && SKU_FORM_CODES.has(i.code)) return `sku|${i.sku.toUpperCase()}`;
+  if (i.code === "unknown_destination") return `dest|${r.channel}|${i.orderId}`;
+  if (i.consignorId) return `${i.code}|c|${i.consignorId}`;
+  if (i.sku) return `${i.code}|sku|${i.sku.toUpperCase()}`;
+  return `${i.code}|${r.channel}|${r.payoutId}|${i.orderId ?? ""}|${i.transactionId ?? ""}|${i.message}`;
+};
+
+function factForm(g: Group, d: ReviewData, back: string, skusInQueue: string[]): string {
+  const sku = g.sku!;
+  const cur = d.items.get(sku.toUpperCase());
+  const pre = cur
+    ? null
+    : [...d.prefixes].sort((a, b) => b.prefix.length - a.prefix.length).find((p) => sku.toUpperCase().startsWith(p.prefix.toUpperCase())) ?? null;
+  const v = {
+    ownership: cur?.ownership ?? pre?.ownership ?? "",
+    acquired_from: cur?.acquired_from ?? pre?.acquired_from ?? "",
+    item_condition: cur?.item_condition ?? pre?.item_condition ?? "",
+    purchase: cur?.purchase_cents != null ? fmt(cur.purchase_cents).replace(/[$,]/g, "") : "",
+    consignor_id: String(cur?.consignor_id ?? pre?.consignor_id ?? ""),
+    commission: cur?.commission_value != null ? String(cur.commission_value) : "",
+  };
+  const sel = (name: string, current: string, opts: [string, string][]) =>
+    `<select name="${name}" aria-label="${name.replace("_", " ")}">${opts.map(([val, label]) => `<option value="${esc(val)}"${val === current ? " selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
+  const suggestion = suggestPrefix(sku);
+  const others = suggestion ? skusInQueue.filter((x) => x.toUpperCase() !== sku.toUpperCase() && x.toUpperCase().startsWith(suggestion.toUpperCase())).length : 0;
+  const hidden = (k: string, val: unknown) => `<input type="hidden" name="${k}" value="${esc(val)}">`;
+  return `<form class="factform" method="post" action="/facts/item">${hidden("sku", sku)}${hidden("title", g.title ?? "")}${hidden("return", back)}
+${sel("ownership", v.ownership, [["", "Ownership?"], ["owned", "LOFI-owned"], ["consignment", "Consignment"]])}
+${sel("acquired_from", v.acquired_from, [["", "Acquired from?"], ["registered_supplier", "GST-registered supplier"], ["private_seller", "Private / non-GST seller"], ["trade_in", "Trade-in"], ["other", "Other"]])}
+${sel("item_condition", v.item_condition, [["", "Condition?"], ["new", "New"], ["secondhand", "Second-hand"]])}
+<input name="purchase_aud" inputmode="decimal" placeholder="Purchase $" value="${esc(v.purchase)}" aria-label="Purchase price" class="money">
+${sel("consignor_id", v.consignor_id, [["", "Consignor (if consigned)"], ...d.consignors.map((c): [string, string] => [String(c.id), `${c.name}${c.country ? ` · ${c.country}` : ""}`])])}
+<input name="commission" inputmode="decimal" placeholder="Comm. %" value="${esc(v.commission)}" aria-label="Commission percent" class="pct">
+<button>Save</button>
+${
+  suggestion
+    ? `<details class="prefix"><summary>Also apply to every SKU starting with…</summary>
+<label class="inline"><input type="checkbox" name="make_prefix" value="1"> Make a rule for SKUs starting with <input name="prefix" value="${esc(suggestion)}" size="8" aria-label="Prefix"></label>
+<span class="muted small">${others ? `${others} other SKU${others === 1 ? "" : "s"} in this queue start with "${esc(suggestion)}".` : "No other SKUs in this queue match yet."} The rule sets ownership, source, condition and consignor; never a purchase price. An item's own record always wins.</span>
+<label class="inline small"><input type="checkbox" name="replace" value="1"> Replace an existing rule for this prefix</label></details>`
+    : ""
+}
+${cur ? `<div class="muted small">Editing the record for ${esc(sku)}.</div>` : pre ? `<div class="muted small">Currently from SKU prefix rule "${esc(pre.prefix)}".</div>` : ""}
+</form>`;
+}
+
+export function renderReview(d: ReviewData, msg?: string, canReset = false, channel?: Channel): Response {
   const back = channel ? `/review?channel=${channel}` : "/review";
-  // One row per distinct problem: the same unknown SKU in three payouts is one fix.
-  const groups = new Map<string, { issue: Issue; title: string | null; reports: PayoutReport[] }>();
-  for (const { report: r, issue: i } of items) {
-    const key = i.code === "unknown_destination" ? `${i.code}|${r.channel}|${i.orderId}` : i.sku ? `${i.code}|sku|${i.sku.toUpperCase()}` : i.consignorId ? `${i.code}|c|${i.consignorId}` : `${i.code}|${r.channel}|${r.payoutId}|${i.orderId ?? ""}|${i.transactionId ?? ""}|${i.message}`;
-    const g = groups.get(key) ?? { issue: i, title: null, reports: [] };
-    g.title ??= [...r.sales, ...r.refunds].find((l) => l.lineId === i.lineId)?.title ?? null;
-    if (!g.reports.includes(r)) g.reports.push(r);
-    groups.set(key, g);
+  const consignorNames = new Map(d.consignors.map((c) => [c.id, c.name]));
+  const open = d.reports.filter((r) => r.status !== "ready");
+
+  // Group blocking issues: one row per distinct fix.
+  const groups = new Map<string, Group>();
+  const reportKeys = new Map<PayoutReport, Set<string>>();
+  for (const r of open) {
+    const keys = new Set<string>();
+    for (const i of r.issues ?? []) {
+      if (i.severity !== "blocking") continue;
+      const key = groupKey(r, i);
+      keys.add(key);
+      const line = [...r.sales, ...r.refunds].find((l) => l.lineId === i.lineId);
+      const g = groups.get(key) ?? { key, group: issueGroup(i), issues: [], sku: i.sku ?? null, title: null, channel: r.channel, reports: [], cents: 0 };
+      if (!g.issues.some((x) => x.code === i.code && x.message === i.message)) g.issues.push(i);
+      g.title ??= line?.title ?? null;
+      g.cents += line ? Math.abs(line.grossCents) : Math.abs(i.cents ?? 0);
+      if (!g.reports.includes(r)) g.reports.push(r);
+      groups.set(key, g);
+    }
+    reportKeys.set(r, keys);
   }
-  const rows = [...groups.values()];
+  // "Fixing this makes a payout ready": it's the only thing blocking it.
+  const unblocks = (g: Group) => g.reports.filter((r) => r.status === "needs_review" && [...(reportKeys.get(r) ?? [])].every((k) => k === g.key));
+
+  const all = [...groups.values()];
+  const by = (grp: IssueGroup) => all.filter((g) => g.group === grp).sort((a, b) => unblocks(b).length - unblocks(a).length || b.cents - a.cents);
+  const skusInQueue = all.filter((g) => g.sku).map((g) => g.sku!);
+  const signoffTypes = new Set(d.reports.flatMap((r) => (r.issues ?? []).filter((i) => i.severity === "signoff").map((i) => i.code + i.message.slice(0, 40))));
+  const count = (st: string) => d.reports.filter((r) => r.status === st).length;
+
+  const tile = (label: string, value: number | string, cls = "") => `<div class="tile"><div class="muted">${label}</div><div class="v ${cls}">${value}</div></div>`;
+  const summary = `<div class="tiles">
+${tile("Payouts", d.reports.length)}
+${tile("Ready (provisional)", count("ready"), count("ready") ? "ready" : "")}
+${tile("Need review", count("needs_review"), count("needs_review") ? "needs_review" : "")}
+${tile("Don't balance", count("unbalanced"), count("unbalanced") ? "unbalanced" : "")}
+${tile("Facts to record", by("facts").length)}
+${tile("Integration problems", by("integration").length)}
+${tile("For the accountant", by("accounting").length)}
+</div>
+<p class="muted small">${signoffTypes.size} treatment(s) are awaiting the accountant's sign-off. They keep payouts <b>Provisional</b> but aren't listed here, because staff can't fix them.</p>`;
+
+  const payoutLinks = (g: Group) => {
+    const ready = unblocks(g);
+    return `${g.reports.map((r) => `<a href="${payoutLink(r.channel, r.payoutId)}">${channelName(r.channel)} ${esc(r.payoutDate)}</a>`).join("<br>")}${
+      ready.length ? `<div class="chip ready small" style="margin-top:4px">Fixing this makes ${ready.length} payout${ready.length === 1 ? "" : "s"} ready</div>` : ""
+    }`;
+  };
+
+  const factRows = by("facts")
+    .map((g) => {
+      const i = g.issues[0]!;
+      const first = g.reports[0]!;
+      const what = g.issues.map((x) => esc(ISSUE_LABEL[x.code] ?? x.code)).join(", ");
+      const detail = g.sku && SKU_FORM_CODES.has(i.code)
+        ? `<b>${esc(g.title ?? g.sku)}</b> <code>${esc(g.sku)}</code><div class="muted small">${what}${g.cents ? ` · ${fmt(g.cents)}` : ""}</div>`
+        : `<b>${what}</b>${i.code === "unknown_destination" ? `<div>Order ${esc(first.sales.find((l) => l.orderId === i.orderId)?.orderName ?? i.orderId)}</div>` : g.title ? `<div>${esc(g.title)}</div>` : ""}<div class="muted small">${esc(i.message)}</div>`;
+      const fix = g.sku && SKU_FORM_CODES.has(i.code)
+        ? factForm(g, d, back, skusInQueue)
+        : fixFor(i, first.channel, g.title, back, i.consignorId ? consignorNames.get(i.consignorId) : undefined) ||
+          (i.code === "unknown_sku" ? `<span class="muted small">Add a SKU to this listing in ${channelName(first.channel)}, then fetch again.</span>` : "");
+      return `<tr><td>${detail}</td><td class="small">${payoutLinks(g)}</td><td>${fix}</td></tr>`;
+    })
+    .join("");
+
+  const otherRows = (grp: IssueGroup) =>
+    by(grp)
+      .map((g) => {
+        const i = g.issues[0]!;
+        const first = g.reports[0]!;
+        return `<tr><td><b>${esc(ISSUE_LABEL[i.code] ?? i.code)}</b>${g.sku ? ` <code>${esc(g.sku)}</code>` : ""}<div class="muted small">${g.issues.map((x) => esc(x.message)).join("<br>")}</div></td>
+<td class="small">${payoutLinks(g)}</td><td><a class="small" href="${payoutLink(first.channel, first.payoutId)}">Open payout</a></td></tr>`;
+      })
+      .join("");
+
+  const section = (title: string, intro: string, rows: string, empty: string, cols: string) =>
+    `<h2>${title}</h2><p class="muted small">${intro}</p><div class="wrap"><table>${cols}${rows || `<tr><td colspan="3" class="muted">${empty}</td></tr>`}</table></div>`;
+
   const body = `<h1>Review queue</h1>
-<p class="muted">Missing facts and numbers that don't add up, across recent payouts. Record the fact once; every open payout is rebuilt straight away.
-Treatments awaiting the accountant aren't listed here; they show as <b>Provisional</b> on each payout.</p>
 ${message(msg)}
-${canReset ? `<p>${clearButton(true)}</p>` : ""}
 ${channelToggle("/review", channel)}
-<div class="wrap"><table><tr><th>Problem</th><th>Detail</th><th>Payouts</th><th>Fix</th></tr>
-${rows
-  .map(({ issue: i, title, reports }) => {
-    const first = reports[0]!;
-    return `<tr><td><b>${esc(ISSUE_LABEL[i.code] ?? i.code)}</b>${i.sku && i.code !== "unknown_destination" ? `<div><code>${esc(i.sku)}</code></div>` : ""}</td>
-<td>${i.code === "unknown_destination" ? `Order ${esc(first.sales.find((l) => l.orderId === i.orderId)?.orderName ?? i.orderId)}<br>` : title ? `${esc(title)}<br>` : ""}<span class="muted small">${esc(i.message)}</span></td>
-<td class="small">${reports.map((r) => `<a href="${payoutLink(r.channel, r.payoutId)}">${channelName(r.channel)} ${esc(r.payoutDate)}</a>`).join("<br>")}</td>
-<td>${fixFor(i, first.channel, title, back, i.consignorId ? consignors.get(i.consignorId) : undefined) || `<a class="small" href="${payoutLink(first.channel, first.payoutId)}">Open payout</a>`}</td></tr>`;
-  })
-  .join("")}
-${rows.length === 0 ? `<tr><td colspan="4" class="muted">Nothing to review${channel ? ` for ${channelName(channel)}` : ""}.</td></tr>` : ""}
-</table></div>`;
+${summary}
+${canReset ? `<p>${clearButton(true)}</p>` : ""}
+${section(
+  "Facts to record",
+  "Record what you know about each item once. Every open payout is rebuilt straight away, and the result shows at the top of this page.",
+  factRows,
+  `No missing facts${channel ? ` for ${channelName(channel)}` : ""}.`,
+  "<tr><th>Item</th><th>Payouts</th><th>Record</th></tr>",
+)}
+${section("Integration problems", "The platform data didn't line up (missing order details, unknown transaction types, amounts that don't match). These need a look, not a fact.", otherRows("integration"), "None.", "<tr><th>Problem</th><th>Payouts</th><th></th></tr>")}
+${section("For the accountant", "Treatments that aren't decided yet, disputes, and items no scenario covers.", otherRows("accounting"), "None.", "<tr><th>Problem</th><th>Payouts</th><th></th></tr>")}`;
   return page("Review queue", body);
 }
 

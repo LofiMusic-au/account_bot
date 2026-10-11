@@ -78,6 +78,8 @@ export interface EbayOrder {
   salesRecordReference?: string;
   lineItems: {
     lineItemId: string;
+    /** The eBay listing (item) ID. Used as the key when the listing has no SKU. */
+    legacyItemId?: string;
     sku?: string;
     title: string;
     quantity: number;
@@ -245,6 +247,7 @@ export function ebayOrderForAudit(o: EbayOrder): EbayOrder {
     program: o.program,
     lineItems: o.lineItems.map((li) => ({
       lineItemId: li.lineItemId,
+      legacyItemId: li.legacyItemId,
       sku: li.sku,
       title: li.title,
       quantity: li.quantity,
@@ -262,14 +265,21 @@ export function ebayOrderForAudit(o: EbayOrder): EbayOrder {
   };
 }
 
+/** Key used for an eBay line whose listing has no SKU. */
+export const EBAY_LISTING_PREFIX = "EBAY-ITEM-";
+
 /** eBay order -> channel-neutral order (amounts as sold). */
 export function ebayOrderToSale(o: EbayOrder, warnings: string[], sources: SourceRef[] = []): OrderSale {
   const lines = o.lineItems.map((li) => {
     const listed = toCents(li.lineItemCost.value);
     const paid = toCents((li.discountedLineItemCost ?? li.lineItemCost).value);
+    const sku = li.sku?.trim() || null;
     return {
       lineId: li.lineItemId,
-      sku: li.sku?.trim() || null,
+      // No SKU on the listing: key the line on its eBay listing ID instead, so
+      // staff can record facts for it like any other SKU.
+      sku: sku ?? (li.legacyItemId ? `${EBAY_LISTING_PREFIX}${li.legacyItemId}` : null),
+      skuFromListing: !sku && !!li.legacyItemId,
       title: li.title,
       quantity: li.quantity,
       grossCents: paid,

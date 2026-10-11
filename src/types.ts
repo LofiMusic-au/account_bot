@@ -64,6 +64,8 @@ export interface SaleLine {
   discountCents: number;
   /** Stands in for an order whose details couldn't be fetched; the order-level issue explains it. */
   placeholder?: boolean;
+  /** The listing has no SKU; `sku` is the platform listing ID (e.g. EBAY-ITEM-123). */
+  skuFromListing?: boolean;
 }
 
 export interface OrderSale {

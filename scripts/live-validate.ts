@@ -246,7 +246,7 @@ async function ebay() {
           ...a,
           orderId: m("ORDER", o.orderId),
           salesRecordReference: null,
-          lineItems: a.lineItems.map((li) => ({ ...li, lineItemId: m("LINE", li.lineItemId) })),
+          lineItems: a.lineItems.map((li) => ({ ...li, lineItemId: m("LINE", li.lineItemId)!, legacyItemId: m("LISTING", li.legacyItemId) })),
         };
       }),
     };

@@ -124,6 +124,16 @@ Built on 4a without changing the architecture. Not merged to `main`.
 
 ---
 
+### 4c. Review console (Oct 2026)
+
+The review queue is now a fact-correction console:
+- summary counts and three groups (facts, integration, accounting)
+- an inline multi-fact form per SKU (`POST /facts/item`), including safe SKU prefix rules (`savePrefixRule`)
+- the eBay listing-ID fallback for SKU-less lines
+- "fixing this makes N payouts ready" markers, and save messages naming the payouts that became ready
+
+Fetch is limited to 6 payouts per platform per click. `ALLOW_DATA_RESET=true`, local only, shows "Clear all payouts". `npm run demo:unload` removes the demo's made-up facts.
+
 ## 5. What's verified vs assumed about the platform APIs
 
 ### Shopify (store "LOFI Music", lofi-music.myshopify.com, AUD, `taxesIncluded: true`)

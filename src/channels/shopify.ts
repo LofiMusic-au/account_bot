@@ -288,6 +288,7 @@ export function shopifyOrderToSale(o: ShopifyOrder, warnings: string[], sources:
     return {
       lineId: li.id,
       sku: li.sku?.trim() || null,
+      skuFromListing: false,
       title: li.name,
       quantity: li.quantity,
       grossCents: original - discounts + tax,
