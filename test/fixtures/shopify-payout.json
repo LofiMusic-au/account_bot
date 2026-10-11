@@ -1,0 +1,64 @@
+{
+  "_note": "Synthetic Shopify Payments payout in the shape of the Admin GraphQL API (shopifyPaymentsAccount.payouts, balanceTransactions, Order). #3252 uses the real order's amounts; the rest are invented.",
+  "payout": {
+    "id": "gid://shopify/ShopifyPaymentsPayout/9001",
+    "legacyResourceId": "9001",
+    "issuedAt": "2026-10-08T00:00:00Z",
+    "status": "PAID",
+    "transactionType": "DEPOSIT",
+    "net": { "amount": "1726.16", "currencyCode": "AUD" }
+  },
+  "transactions": [
+    { "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/1", "type": "CHARGE", "sourceType": "CHARGE", "test": false, "transactionDate": "2026-10-05T01:30:00Z", "adjustmentReason": null,
+      "amount": { "amount": "965.00", "currencyCode": "AUD" }, "fee": { "amount": "17.37", "currencyCode": "AUD" }, "net": { "amount": "947.63", "currencyCode": "AUD" },
+      "associatedOrder": { "id": "gid://shopify/Order/3252", "name": "#3252" } },
+    { "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/2", "type": "CHARGE", "sourceType": "CHARGE", "test": false, "transactionDate": "2026-10-06T01:30:00Z", "adjustmentReason": null,
+      "amount": { "amount": "380.00", "currencyCode": "AUD" }, "fee": { "amount": "7.22", "currencyCode": "AUD" }, "net": { "amount": "372.78", "currencyCode": "AUD" },
+      "associatedOrder": { "id": "gid://shopify/Order/3260", "name": "#3260" } },
+    { "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/3", "type": "CHARGE", "sourceType": "CHARGE", "test": false, "transactionDate": "2026-10-06T03:30:00Z", "adjustmentReason": null,
+      "amount": { "amount": "560.00", "currencyCode": "AUD" }, "fee": { "amount": "12.30", "currencyCode": "AUD" }, "net": { "amount": "547.70", "currencyCode": "AUD" },
+      "associatedOrder": { "id": "gid://shopify/Order/3261", "name": "#3261" } },
+    { "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/4", "type": "REFUND", "sourceType": "REFUND", "test": false, "transactionDate": "2026-10-07T01:30:00Z", "adjustmentReason": null,
+      "amount": { "amount": "-100.00", "currencyCode": "AUD" }, "fee": { "amount": "0.00", "currencyCode": "AUD" }, "net": { "amount": "-100.00", "currencyCode": "AUD" },
+      "associatedOrder": { "id": "gid://shopify/Order/3250", "name": "#3250" } },
+    { "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/5", "type": "SHIPPING_LABEL", "sourceType": "SHIPPING_LABEL", "test": false, "transactionDate": "2026-10-07T02:30:00Z", "adjustmentReason": null,
+      "amount": { "amount": "-14.95", "currencyCode": "AUD" }, "fee": { "amount": "0.00", "currencyCode": "AUD" }, "net": { "amount": "-14.95", "currencyCode": "AUD" },
+      "associatedOrder": { "id": "gid://shopify/Order/3260", "name": "#3260" } },
+    { "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/6", "type": "ADJUSTMENT", "sourceType": "ADJUSTMENT", "test": false, "transactionDate": "2026-10-07T03:30:00Z", "adjustmentReason": "fee_adjustment",
+      "amount": { "amount": "-2.00", "currencyCode": "AUD" }, "fee": { "amount": "0.00", "currencyCode": "AUD" }, "net": { "amount": "-2.00", "currencyCode": "AUD" },
+      "associatedOrder": null },
+    { "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/7", "type": "CHARGEBACK_FEE", "sourceType": "DISPUTE", "test": false, "transactionDate": "2026-10-07T04:30:00Z", "adjustmentReason": null,
+      "amount": { "amount": "-25.00", "currencyCode": "AUD" }, "fee": { "amount": "0.00", "currencyCode": "AUD" }, "net": { "amount": "-25.00", "currencyCode": "AUD" },
+      "associatedOrder": null }
+  ],
+  "orders": [
+    { "id": "gid://shopify/Order/3252", "name": "#3252", "createdAt": "2026-10-05T01:27:52Z", "presentmentCurrencyCode": "AUD", "paymentGatewayNames": ["shopify_payments"], "taxesIncluded": true,
+      "shippingAddress": { "countryCodeV2": "AU" }, "totalShippingPriceSet": { "shopMoney": { "amount": "45.95" } }, "totalPriceSet": { "shopMoney": { "amount": "965.0" } },
+      "lineItems": { "nodes": [
+        { "id": "gid://shopify/LineItem/1", "sku": "240/100_Stepdown", "name": "240V - 100V 50W Isolated Step-Down Transformer", "quantity": 1,
+          "originalTotalSet": { "shopMoney": { "amount": "65.0" } }, "discountAllocations": [], "taxLines": [ { "priceSet": { "shopMoney": { "amount": "5.91" } } } ] },
+        { "id": "gid://shopify/LineItem/2", "sku": "RM-256549-001196-140526", "name": "Korg Wavestation A/D Synthesiser Rack", "quantity": 1,
+          "originalTotalSet": { "shopMoney": { "amount": "854.05" } }, "discountAllocations": [], "taxLines": [ { "priceSet": { "shopMoney": { "amount": "77.64" } } } ] }
+      ] } },
+    { "id": "gid://shopify/Order/3260", "name": "#3260", "createdAt": "2026-10-06T01:20:00Z", "presentmentCurrencyCode": "AUD", "paymentGatewayNames": ["shopify_payments"], "taxesIncluded": true,
+      "shippingAddress": { "countryCodeV2": "AU" }, "totalShippingPriceSet": { "shopMoney": { "amount": "20.00" } }, "totalPriceSet": { "shopMoney": { "amount": "380.00" } },
+      "lineItems": { "nodes": [
+        { "id": "gid://shopify/LineItem/3", "sku": "L-DISC-1", "name": "Elektron Digitakt (10% off code)", "quantity": 1,
+          "originalTotalSet": { "shopMoney": { "amount": "400.00" } },
+          "discountAllocations": [ { "allocatedAmountSet": { "shopMoney": { "amount": "40.00" } } } ],
+          "taxLines": [ { "priceSet": { "shopMoney": { "amount": "32.73" } } } ] }
+      ] } },
+    { "id": "gid://shopify/Order/3261", "name": "#3261", "createdAt": "2026-10-06T03:20:00Z", "presentmentCurrencyCode": "AUD", "paymentGatewayNames": ["shopify_payments"], "taxesIncluded": true,
+      "shippingAddress": { "countryCodeV2": "NZ" }, "totalShippingPriceSet": { "shopMoney": { "amount": "60.00" } }, "totalPriceSet": { "shopMoney": { "amount": "560.00" } },
+      "lineItems": { "nodes": [
+        { "id": "gid://shopify/LineItem/4", "sku": "L-NZ-2", "name": "Sequential Prophet 600 (second-hand)", "quantity": 1,
+          "originalTotalSet": { "shopMoney": { "amount": "500.00" } }, "discountAllocations": [], "taxLines": [] }
+      ] } },
+    { "id": "gid://shopify/Order/3250", "name": "#3250", "createdAt": "2026-10-01T00:00:00Z", "presentmentCurrencyCode": "AUD", "paymentGatewayNames": ["shopify_payments"], "taxesIncluded": true,
+      "shippingAddress": { "countryCodeV2": "AU" }, "totalShippingPriceSet": { "shopMoney": { "amount": "38.95" } }, "totalPriceSet": { "shopMoney": { "amount": "1178.0" } },
+      "lineItems": { "nodes": [
+        { "id": "gid://shopify/LineItem/5", "sku": "L-mk3-0010230-300726", "name": "Tascam Portastudio 424 MKIII", "quantity": 1,
+          "originalTotalSet": { "shopMoney": { "amount": "1139.05" } }, "discountAllocations": [], "taxLines": [] }
+      ] } }
+  ]
+}

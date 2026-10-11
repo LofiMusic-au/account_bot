@@ -74,6 +74,13 @@ export const SCENARIOS: Record<ScenarioCode, ScenarioDef> = {
  */
 export const EBAY_INTERNATIONAL_SHIPPING_TREATMENT: TaxCode | "UNRESOLVED" = "UNRESOLVED";
 
+/**
+ * A3 is unresolved: the trade-in split and documents aren't confirmed, so
+ * trade-in sales go to the review queue. Set to "RESOLVED" once the
+ * accountant approves the A3 treatment encoded in the engine.
+ */
+export const TRADE_IN_TREATMENT: "RESOLVED" | "UNRESOLVED" = "UNRESOLVED";
+
 /** Division 66: purchases above this are credited in the period of resale. */
 export const DIV66_THRESHOLD_CENTS = 300_00;
 

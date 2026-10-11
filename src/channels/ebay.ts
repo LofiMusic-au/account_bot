@@ -11,7 +11,7 @@
 
 import { toCents } from "../money";
 import { rescaleOrder } from "../rules/engine";
-import type { Adjustment, Fee, NormalisedPayout, OrderSale, Refund } from "../types";
+import type { Adjustment, Fee, FeeCategory, Issue, NormalisedPayout, OrderSale, RawTransaction, Refund, SourceRef } from "../types";
 
 export interface EbayConfig {
   clientId: string;
@@ -59,6 +59,7 @@ export interface EbayTransaction {
 
 export interface EbayOrder {
   orderId: string;
+  pricingSummary?: { total?: Amount };
   creationDate: string;
   salesRecordReference?: string;
   lineItems: {
@@ -171,28 +172,70 @@ export class EbayClient {
   }
 }
 
-const FEE_TYPE_MAP: Record<string, string> = {
-  FINAL_VALUE_FEE: "ebay_final_value_fee",
-  FINAL_VALUE_FEE_FIXED_PER_ORDER: "ebay_final_value_fee_fixed_per_order",
-  INTERNATIONAL_FEE: "ebay_international_fee",
-  AD_FEE: "ebay_promoted_listing_fee",
+const FEE_TYPE_MAP: Record<string, { type: string; category: FeeCategory }> = {
+  FINAL_VALUE_FEE: { type: "ebay_final_value_fee", category: "marketplace" },
+  FINAL_VALUE_FEE_FIXED_PER_ORDER: { type: "ebay_final_value_fee_fixed_per_order", category: "marketplace" },
+  INTERNATIONAL_FEE: { type: "ebay_international_fee", category: "marketplace" },
+  AD_FEE: { type: "ebay_promoted_listing_fee", category: "advertising" },
 };
-const feeType = (t?: string) => (t && FEE_TYPE_MAP[t]) || "ebay_other_fee";
+const feeType = (t?: string) => (t && FEE_TYPE_MAP[t]) || { type: "ebay_other_fee", category: "other" as const };
+
+/**
+ * eBay transaction types handled as adjustments. Others (LOAN_REPAYMENT,
+ * PURCHASE, TRANSFER, WITHDRAWAL, anything new) are counted in the total but
+ * block the payout as unsupported. DISPUTE is known but always needs a person.
+ */
+const ADJUSTMENT_TYPES = new Set(["CREDIT", "ADJUSTMENT", "DISPUTE"]);
+
+/** Drop buyer details before a transaction is stored. */
+function stripBuyer(t: EbayTransaction): unknown {
+  const { buyer: _buyer, ...rest } = t as EbayTransaction & { buyer?: unknown };
+  return rest;
+}
+
+/** The eBay order fields kept for audit: amounts, SKUs and destination country only. */
+export function ebayOrderForAudit(o: EbayOrder): unknown {
+  const fsi = o.fulfillmentStartInstructions?.[0];
+  return {
+    orderId: o.orderId,
+    creationDate: o.creationDate,
+    salesRecordReference: o.salesRecordReference ?? null,
+    pricingSummary: o.pricingSummary ?? null,
+    program: o.program ?? null,
+    lineItems: o.lineItems.map((li) => ({
+      lineItemId: li.lineItemId,
+      sku: li.sku ?? null,
+      title: li.title,
+      quantity: li.quantity,
+      lineItemCost: li.lineItemCost,
+      discountedLineItemCost: li.discountedLineItemCost ?? null,
+      deliveryCost: li.deliveryCost ?? null,
+    })),
+    destinationCountry: fsi?.finalDestinationAddress?.countryCode ?? fsi?.shippingStep?.shipTo?.contactAddress?.countryCode ?? null,
+    ebaySupportedFulfillment: fsi?.ebaySupportedFulfillment ?? null,
+  };
+}
 
 /** eBay order -> channel-neutral order (amounts as sold). */
-export function ebayOrderToSale(o: EbayOrder, warnings: string[]): OrderSale {
-  const lines = o.lineItems.map((li) => ({
-    lineId: li.lineItemId,
-    sku: li.sku ?? null,
-    title: li.title,
-    quantity: li.quantity,
-    grossCents: toCents((li.discountedLineItemCost ?? li.lineItemCost).value),
-  }));
+export function ebayOrderToSale(o: EbayOrder, warnings: string[], sources: SourceRef[] = []): OrderSale {
+  const lines = o.lineItems.map((li) => {
+    const listed = toCents(li.lineItemCost.value);
+    const paid = toCents((li.discountedLineItemCost ?? li.lineItemCost).value);
+    return {
+      lineId: li.lineItemId,
+      sku: li.sku?.trim() || null,
+      title: li.title,
+      quantity: li.quantity,
+      grossCents: paid,
+      discountCents: listed - paid,
+    };
+  });
   const shippingCents = o.lineItems.reduce((a, li) => a + toCents(li.deliveryCost?.shippingCost?.value), 0);
   const fsi = o.fulfillmentStartInstructions?.[0];
-  const dest =
+  const destRaw =
     fsi?.finalDestinationAddress?.countryCode ?? fsi?.shippingStep?.shipTo?.contactAddress?.countryCode ?? null;
-  const eis = !!o.program?.ebayInternationalShipping || (fsi?.ebaySupportedFulfillment === true && dest !== "AU");
+  const dest = destRaw ? destRaw.toUpperCase() : null;
+  const eis = !!o.program?.ebayInternationalShipping || (fsi?.ebaySupportedFulfillment === true && dest !== null && dest !== "AU");
   const buyerCurrency = o.lineItems[0]?.lineItemCost.convertedFromCurrency ?? null;
   if (o.lineItems.some((li) => li.lineItemCost.currency !== "AUD")) {
     warnings.push(`eBay order ${o.orderId}: amounts not in AUD`);
@@ -202,12 +245,13 @@ export function ebayOrderToSale(o: EbayOrder, warnings: string[]): OrderSale {
     orderName: o.salesRecordReference ? `eBay ${o.orderId} (#${o.salesRecordReference})` : `eBay ${o.orderId}`,
     orderDate: o.creationDate,
     destinationCountry: dest,
-    shippingProgram: eis ? "ebay_international" : dest && dest !== "AU" ? "direct_export" : "domestic",
+    shippingProgram: eis ? "ebay_international" : dest === null ? "unknown" : dest !== "AU" ? "direct_export" : "domestic",
     buyerCurrency: buyerCurrency && buyerCurrency !== "AUD" ? buyerCurrency : null,
     grossCents: lines.reduce((a, l) => a + l.grossCents, 0) + shippingCents,
     lines,
     shippingCents,
     gateway: "eBay managed payments",
+    sources,
   };
 }
 
@@ -218,19 +262,56 @@ export function normaliseEbayPayout(
   orders: Map<string, EbayOrder>,
 ): NormalisedPayout {
   const warnings: string[] = [];
+  const issues: Issue[] = [];
   const sales: OrderSale[] = [];
   const refunds: Refund[] = [];
   const fees: Fee[] = [];
   const adjustments: Adjustment[] = [];
+  const raw: RawTransaction[] = [];
   const signed = (t: EbayTransaction) => (t.bookingEntry === "CREDIT" ? 1 : -1) * toCents(t.amount.value);
+  const ref = (t: EbayTransaction, extra: Partial<SourceRef> = {}): SourceRef => ({
+    platform: "ebay",
+    payoutId: p.payoutId,
+    transactionId: t.transactionId,
+    transactionType: t.transactionType,
+    orderId: t.orderId ?? null,
+    lineItemId: null,
+    rawAmount: t.amount.value,
+    rawCurrency: t.amount.currency,
+    sourceTimestamp: t.transactionDate,
+    ...extra,
+  });
+
+  if (p.amount.currency !== "AUD") {
+    issues.push({ code: "non_aud_transaction", severity: "blocking", message: `Payout is in ${p.amount.currency}, not AUD` });
+  }
 
   for (const t of txns) {
-    if (t.amount.currency !== "AUD") warnings.push(`eBay transaction ${t.transactionId} is in ${t.amount.currency}`);
+    raw.push({
+      transactionId: t.transactionId,
+      transactionType: t.transactionType,
+      orderId: t.orderId ?? null,
+      rawAmount: t.amount.value,
+      rawCurrency: t.amount.currency,
+      sourceTimestamp: t.transactionDate,
+      payload: stripBuyer(t),
+    });
+    if (t.amount.currency !== "AUD") {
+      issues.push({
+        code: "non_aud_transaction",
+        severity: "blocking",
+        message: `eBay transaction ${t.transactionId} is in ${t.amount.currency}, not AUD`,
+        transactionId: t.transactionId,
+      });
+    }
     const orderId = t.orderId ?? null;
+    const src = ref(t);
 
     switch (t.transactionType) {
       case "SALE": {
-        // The sale arrives net of selling fees: gross = net + fees.
+        // Assumption (unverified on live data): a SALE arrives net of selling
+        // fees, so gross = net + fees. Because of this the payout total alone
+        // can't prove the gross; the order amount check below does.
         const feeTotal = toCents(t.totalFeeAmount?.value);
         const gross = signed(t) + feeTotal;
         let itemised = 0;
@@ -238,35 +319,66 @@ export function normaliseEbayPayout(
           for (const mf of li.marketplaceFees ?? []) {
             const c = toCents(mf.amount.value);
             itemised += c;
-            fees.push({ type: feeType(mf.feeType), cents: c, orderId, description: `${mf.feeType} ${orderId}` });
+            const ft = feeType(mf.feeType);
+            fees.push({
+              type: ft.type,
+              category: ft.category,
+              cents: c,
+              orderId,
+              description: `${mf.feeType} ${orderId}`,
+              source: ref(t, { lineItemId: li.lineItemId, rawAmount: mf.amount.value, rawCurrency: mf.amount.currency }),
+            });
           }
         }
         if (feeTotal !== itemised) {
-          fees.push({ type: "ebay_other_fee", cents: feeTotal - itemised, orderId, description: `Unitemised fees ${orderId}` });
+          fees.push({
+            type: "ebay_other_fee",
+            category: "other",
+            cents: feeTotal - itemised,
+            orderId,
+            description: `Unitemised fees ${orderId}`,
+            source: ref(t, { rawAmount: t.totalFeeAmount?.value ?? null }),
+          });
         }
         if (toCents(t.eBayCollectedTaxAmount?.value) !== 0) {
           warnings.push(`eBay order ${orderId}: eBay collected tax on this sale; check the gross`);
         }
         const o = orderId ? orders.get(orderId) : undefined;
         if (!o) {
-          warnings.push(`eBay order ${orderId}: order details not found; added for review`);
+          issues.push({
+            code: "order_details_missing",
+            severity: "blocking",
+            message: `eBay order ${orderId ?? t.transactionId}: order details not found`,
+            orderId,
+            transactionId: t.transactionId,
+          });
           sales.push({
             orderId: orderId ?? t.transactionId,
             orderName: `eBay ${orderId ?? t.transactionId}`,
             orderDate: t.transactionDate,
             destinationCountry: null,
-            shippingProgram: "domestic",
+            shippingProgram: "unknown",
             buyerCurrency: null,
             grossCents: gross,
-            lines: [{ lineId: `${t.transactionId}:unknown`, sku: null, title: "Order details unavailable", quantity: 1, grossCents: gross }],
+            lines: [
+              { lineId: `${t.transactionId}:unknown`, sku: null, title: "Order details unavailable", quantity: 1, grossCents: gross, discountCents: 0 },
+            ],
             shippingCents: 0,
             gateway: "eBay managed payments",
+            sources: [src],
           });
           break;
         }
-        let sale = ebayOrderToSale(o, warnings);
+        let sale = ebayOrderToSale(o, warnings, [src]);
         if (sale.grossCents !== gross) {
-          warnings.push(`${sale.orderName}: payout shows ${gross} cents, order shows ${sale.grossCents} cents; split in proportion`);
+          issues.push({
+            code: "sale_amount_mismatch",
+            severity: "blocking",
+            message: `${sale.orderName}: payout implies ${gross} cents (net + fees) but the order shows ${sale.grossCents} cents; split in proportion until checked`,
+            orderId,
+            transactionId: t.transactionId,
+            cents: gross - sale.grossCents,
+          });
           sale = rescaleOrder(sale, gross);
         }
         sales.push(sale);
@@ -274,28 +386,59 @@ export function normaliseEbayPayout(
       }
       case "REFUND": {
         const o = orderId ? orders.get(orderId) : undefined;
+        if (toCents(t.totalFeeAmount?.value) !== 0) {
+          warnings.push(
+            `eBay refund ${t.transactionId}: carries ${t.totalFeeAmount?.value} of fees; fee credits on refunds aren't itemised yet`,
+          );
+        }
         refunds.push({
           orderId: orderId ?? t.transactionId,
           orderName: o ? ebayOrderToSale(o, []).orderName : `eBay ${orderId ?? t.transactionId}`,
           cents: -signed(t),
           date: t.transactionDate,
           order: o ? ebayOrderToSale(o, warnings) : null,
+          source: src,
         });
         break;
       }
-      case "NON_SALE_CHARGE":
-        fees.push({ type: feeType(t.feeType), cents: -signed(t), orderId, description: t.transactionMemo ?? t.feeType ?? "eBay charge" });
+      case "NON_SALE_CHARGE": {
+        const ft = feeType(t.feeType);
+        fees.push({ type: ft.type, category: ft.category, cents: -signed(t), orderId, description: t.transactionMemo ?? t.feeType ?? "eBay charge", source: src });
         break;
+      }
       case "SHIPPING_LABEL":
-        fees.push({ type: "ebay_shipping_label", cents: -signed(t), orderId, description: t.transactionMemo ?? "Shipping label" });
+        fees.push({ type: "ebay_shipping_label", category: "shipping_label", cents: -signed(t), orderId, description: t.transactionMemo ?? "Shipping label", source: src });
         break;
-      default:
+      default: {
+        const supported = ADJUSTMENT_TYPES.has(t.transactionType);
+        if (!supported) {
+          issues.push({
+            code: "unsupported_transaction_type",
+            severity: "blocking",
+            message: `eBay transaction type ${t.transactionType} isn't supported yet (${t.transactionId}); counted in the total but needs a person`,
+            transactionId: t.transactionId,
+            orderId,
+            cents: signed(t),
+          });
+        } else if (t.transactionType === "DISPUTE") {
+          issues.push({
+            code: "dispute",
+            severity: "blocking",
+            message: `eBay dispute on ${orderId ?? t.transactionId} affects the sale's GST and needs a person`,
+            transactionId: t.transactionId,
+            orderId,
+            cents: signed(t),
+          });
+        }
         adjustments.push({
           type: t.transactionType,
           cents: signed(t),
           orderId,
           description: [t.transactionType.toLowerCase(), t.transactionMemo, orderId].filter(Boolean).join(" · "),
+          supported,
+          source: src,
         });
+      }
     }
   }
 
@@ -304,10 +447,18 @@ export function normaliseEbayPayout(
     payoutId: p.payoutId,
     payoutDate: p.payoutDate.slice(0, 10),
     netCents: toCents(p.amount.value),
+    rawAmount: p.amount.value,
+    rawCurrency: p.amount.currency,
     sales,
     refunds,
     fees,
     adjustments,
     warnings,
+    issues,
+    raw: {
+      payout: p,
+      transactions: raw,
+      orders: [...orders.values()].map((o) => ({ orderId: o.orderId, payload: ebayOrderForAudit(o) })),
+    },
   };
 }

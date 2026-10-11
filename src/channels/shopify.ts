@@ -7,7 +7,7 @@
 
 import { toCents } from "../money";
 import { rescaleOrder } from "../rules/engine";
-import type { Adjustment, Fee, NormalisedPayout, OrderSale, Refund } from "../types";
+import type { Adjustment, Fee, FeeCategory, Issue, NormalisedPayout, OrderSale, RawTransaction, Refund, SourceRef } from "../types";
 
 export interface ShopifyConfig {
   shop: string; // xxx.myshopify.com
@@ -187,13 +187,57 @@ interface PageInfo {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Shopify Payments balance transaction types this code understands, from the
+ * ShopifyPaymentsTransactionType enum (Admin API 2025-10). Anything else is
+ * counted in the total but blocks the payout as unsupported.
+ */
+const FEE_TYPES: Record<string, { type: string; category: FeeCategory }> = {
+  CHARGEBACK_FEE: { type: "shopify_chargeback_fee", category: "payment" },
+  CHARGEBACK_FEE_REFUND: { type: "shopify_chargeback_fee", category: "payment" },
+};
+const ADJUSTMENT_TYPES = new Set([
+  "ADJUSTMENT",
+  "CHARGE_ADJUSTMENT",
+  "REFUND_ADJUSTMENT",
+  "REFUND_FAILURE",
+  "RESERVED_FUNDS",
+  "RESERVED_FUNDS_WITHDRAWAL",
+  "RESERVED_FUNDS_REVERSAL",
+  "CHARGEBACK_HOLD",
+  "CHARGEBACK_HOLD_RELEASE",
+]);
+const DISPUTE_TYPES = new Set(["DISPUTE_WITHDRAWAL", "DISPUTE_REVERSAL"]);
+
+function ref(p: ShopifyPayout, t: ShopifyBalanceTxn | null, extra: Partial<SourceRef> = {}): SourceRef {
+  return {
+    platform: "shopify",
+    payoutId: p.legacyResourceId,
+    transactionId: t?.id ?? null,
+    transactionType: t?.type ?? null,
+    orderId: t?.associatedOrder?.id ?? null,
+    lineItemId: null,
+    rawAmount: t?.amount.amount ?? null,
+    rawCurrency: t?.amount.currencyCode ?? null,
+    sourceTimestamp: t?.transactionDate ?? null,
+    ...extra,
+  };
+}
+
 /** Shopify order -> channel-neutral order (full amounts, as sold). */
-export function shopifyOrderToSale(o: ShopifyOrder, warnings: string[]): OrderSale {
+export function shopifyOrderToSale(o: ShopifyOrder, warnings: string[], sources: SourceRef[] = []): OrderSale {
   const lines = o.lineItems.nodes.map((li) => {
     const original = toCents(li.originalTotalSet.shopMoney.amount);
     const discounts = li.discountAllocations.reduce((a, d) => a + toCents(d.allocatedAmountSet.shopMoney.amount), 0);
     const tax = o.taxesIncluded ? 0 : li.taxLines.reduce((a, t) => a + toCents(t.priceSet.shopMoney.amount), 0);
-    return { lineId: li.id, sku: li.sku, title: li.name, quantity: li.quantity, grossCents: original - discounts + tax };
+    return {
+      lineId: li.id,
+      sku: li.sku?.trim() || null,
+      title: li.name,
+      quantity: li.quantity,
+      grossCents: original - discounts + tax,
+      discountCents: discounts,
+    };
   });
   const shippingCents = toCents(o.totalShippingPriceSet.shopMoney.amount);
   const grossCents = lines.reduce((a, l) => a + l.grossCents, 0) + shippingCents;
@@ -201,20 +245,24 @@ export function shopifyOrderToSale(o: ShopifyOrder, warnings: string[]): OrderSa
   if (total !== grossCents) {
     warnings.push(`${o.name}: lines + shipping = ${grossCents} cents but Shopify total is ${total} cents`);
   }
-  const dest = o.shippingAddress?.countryCodeV2 ?? null;
+  const dest = o.shippingAddress?.countryCodeV2?.toUpperCase() ?? null;
   return {
     orderId: o.id,
     orderName: o.name,
     orderDate: o.createdAt,
     destinationCountry: dest,
-    shippingProgram: dest && dest !== "AU" ? "direct_export" : "domestic",
+    shippingProgram: dest === null ? "unknown" : dest !== "AU" ? "direct_export" : "domestic",
     buyerCurrency: o.presentmentCurrencyCode !== "AUD" ? o.presentmentCurrencyCode : null,
     grossCents,
     lines,
     shippingCents,
     gateway: o.paymentGatewayNames.join(", "),
+    sources,
   };
 }
+
+/** The order fields kept for audit. The query asks for no names or street addresses. */
+const orderForAudit = (o: ShopifyOrder) => o;
 
 /** Pure: Shopify payout + its balance transactions + orders -> NormalisedPayout. */
 export function normaliseShopifyPayout(
@@ -223,45 +271,107 @@ export function normaliseShopifyPayout(
   orders: Map<string, ShopifyOrder>,
 ): NormalisedPayout {
   const warnings: string[] = [];
+  const issues: Issue[] = [];
   const fees: Fee[] = [];
   const refunds: Refund[] = [];
   const adjustments: Adjustment[] = [];
-  const chargesByOrder = new Map<string, { name: string; cents: number; date: string }>();
+  const raw: RawTransaction[] = [];
+  const chargesByOrder = new Map<string, { name: string; cents: number; date: string; sources: SourceRef[] }>();
+  if (p.net.currencyCode !== "AUD") {
+    issues.push({ code: "non_aud_transaction", severity: "blocking", message: `Payout is in ${p.net.currencyCode}, not AUD` });
+  }
 
   for (const t of txns) {
+    raw.push({
+      transactionId: t.id,
+      transactionType: t.type,
+      orderId: t.associatedOrder?.id ?? null,
+      rawAmount: t.amount.amount,
+      rawCurrency: t.amount.currencyCode,
+      sourceTimestamp: t.transactionDate,
+      payload: t,
+    });
+    const src = ref(p, t);
     if (t.test) {
-      warnings.push(`Test transaction ${t.id} included in payout`);
+      issues.push({ code: "test_transaction", severity: "blocking", message: `Test transaction ${t.id} is in this payout`, transactionId: t.id });
     }
-    if (t.amount.currencyCode !== "AUD") warnings.push(`Transaction ${t.id} is in ${t.amount.currencyCode}`);
+    if (t.amount.currencyCode !== "AUD") {
+      issues.push({
+        code: "non_aud_transaction",
+        severity: "blocking",
+        message: `Transaction ${t.id} is in ${t.amount.currencyCode}, not AUD`,
+        transactionId: t.id,
+      });
+    }
     const amount = toCents(t.amount.amount);
     const fee = toCents(t.fee.amount);
     const net = toCents(t.net.amount);
+    if (amount - fee !== net) {
+      issues.push({
+        code: "payout_mismatch",
+        severity: "blocking",
+        message: `Transaction ${t.id}: amount ${t.amount.amount} less fee ${t.fee.amount} isn't net ${t.net.amount}`,
+        transactionId: t.id,
+        cents: net - (amount - fee),
+      });
+    }
     const orderId = t.associatedOrder?.id ?? null;
     const orderName = t.associatedOrder?.name ?? "(no order)";
+    const feeSrc = ref(p, t, { rawAmount: t.fee.amount, rawCurrency: t.fee.currencyCode });
 
     if (t.type === "CHARGE" && orderId) {
-      const c = chargesByOrder.get(orderId) ?? { name: orderName, cents: 0, date: t.transactionDate };
+      const c = chargesByOrder.get(orderId) ?? { name: orderName, cents: 0, date: t.transactionDate, sources: [] };
       c.cents += amount;
+      c.sources.push(src);
       chargesByOrder.set(orderId, c);
-      if (fee) fees.push({ type: "shopify_payments_fee", cents: fee, orderId, description: `Payment processing ${orderName}` });
+      if (fee) fees.push({ type: "shopify_payments_fee", category: "payment", cents: fee, orderId, description: `Payment processing ${orderName}`, source: feeSrc });
     } else if (t.type === "REFUND" && orderId) {
       const o = orders.get(orderId);
+      if (!o) {
+        issues.push({ code: "order_details_missing", severity: "blocking", message: `${orderName}: refunded order not found`, orderId, transactionId: t.id });
+      }
       refunds.push({
         orderId,
         orderName,
         cents: -amount,
         date: t.transactionDate,
         order: o ? shopifyOrderToSale(o, warnings) : null,
+        source: src,
       });
-      if (fee) fees.push({ type: "shopify_payments_fee", cents: fee, orderId, description: `Refund fee ${orderName}` });
+      if (fee) fees.push({ type: "shopify_payments_fee", category: "payment", cents: fee, orderId, description: `Refund fee ${orderName}`, source: feeSrc });
     } else if (t.type.startsWith("SHIPPING_")) {
-      fees.push({ type: "shopify_shipping_label", cents: -net, orderId, description: t.type.toLowerCase() });
+      fees.push({ type: "shopify_shipping_label", category: "shipping_label", cents: -net, orderId, description: t.type.toLowerCase(), source: src });
+    } else if (FEE_TYPES[t.type]) {
+      const f = FEE_TYPES[t.type]!;
+      fees.push({ type: f.type, category: f.category, cents: -net, orderId, description: t.type.toLowerCase(), source: src });
     } else {
+      const supported = ADJUSTMENT_TYPES.has(t.type) || DISPUTE_TYPES.has(t.type);
+      if (!supported) {
+        issues.push({
+          code: "unsupported_transaction_type",
+          severity: "blocking",
+          message: `Shopify transaction type ${t.type} isn't supported yet (${t.id}); counted in the total but needs a person`,
+          transactionId: t.id,
+          orderId,
+          cents: net,
+        });
+      } else if (DISPUTE_TYPES.has(t.type)) {
+        issues.push({
+          code: "dispute",
+          severity: "blocking",
+          message: `${orderName}: ${t.type.toLowerCase()} (chargeback) affects the sale's GST and needs a person`,
+          transactionId: t.id,
+          orderId,
+          cents: net,
+        });
+      }
       adjustments.push({
         type: t.type,
         cents: net,
         orderId,
         description: [t.type.toLowerCase(), t.adjustmentReason, t.associatedOrder?.name].filter(Boolean).join(" · "),
+        supported,
+        source: src,
       });
     }
   }
@@ -270,22 +380,25 @@ export function normaliseShopifyPayout(
   for (const [orderId, charge] of chargesByOrder) {
     const o = orders.get(orderId);
     if (!o) {
-      warnings.push(`${charge.name}: order details not found; added for review`);
+      issues.push({ code: "order_details_missing", severity: "blocking", message: `${charge.name}: order details not found`, orderId });
       sales.push({
         orderId,
         orderName: charge.name,
         orderDate: charge.date,
         destinationCountry: null,
-        shippingProgram: "domestic",
+        shippingProgram: "unknown",
         buyerCurrency: null,
         grossCents: charge.cents,
-        lines: [{ lineId: `${orderId}:unknown`, sku: null, title: "Order details unavailable", quantity: 1, grossCents: charge.cents }],
+        lines: [
+          { lineId: `${orderId}:unknown`, sku: null, title: "Order details unavailable", quantity: 1, grossCents: charge.cents, discountCents: 0 },
+        ],
         shippingCents: 0,
         gateway: "shopify_payments",
+        sources: charge.sources,
       });
       continue;
     }
-    let sale = shopifyOrderToSale(o, warnings);
+    let sale = shopifyOrderToSale(o, warnings, charge.sources);
     if (sale.grossCents !== charge.cents) {
       warnings.push(
         `${o.name}: Shopify Payments collected ${charge.cents} cents of a ${sale.grossCents} cent order (part-paid another way?); split in proportion`,
@@ -300,10 +413,18 @@ export function normaliseShopifyPayout(
     payoutId: p.legacyResourceId,
     payoutDate: p.issuedAt.slice(0, 10),
     netCents: toCents(p.net.amount),
+    rawAmount: p.net.amount,
+    rawCurrency: p.net.currencyCode,
     sales,
     refunds,
     fees,
     adjustments,
     warnings,
+    issues,
+    raw: {
+      payout: p,
+      transactions: raw,
+      orders: [...orders.values()].map((o) => ({ orderId: o.id, payload: orderForAudit(o) })),
+    },
   };
 }

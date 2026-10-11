@@ -1,227 +1,250 @@
+// Payout reconstruction tests: both channels normalise into the same model and
+// reconcile to the actual payout to the cent, with every unknown surfaced.
+
 import { describe, expect, it } from "vitest";
-import { normaliseShopifyPayout, type ShopifyBalanceTxn, type ShopifyOrder } from "../src/channels/shopify";
-import { normaliseEbayPayout, type EbayOrder, type EbayTransaction } from "../src/channels/ebay";
 import { buildReport } from "../src/reconcile";
-import type { StockItem } from "../src/types";
+import { ebayFixture, fixtureResolver, shopifyFixture } from "./helpers";
+import type { Issue } from "../src/types";
 
-// Order shapes taken from LOFI's live Shopify store (#3252, #3254), amounts unchanged.
-const money = (amount: string) => ({ shopMoney: { amount } });
-const li = (id: string, sku: string, name: string, amount: string) => ({
-  id,
-  sku,
-  name,
-  quantity: 1,
-  originalTotalSet: money(amount),
-  discountAllocations: [],
-  taxLines: [{ priceSet: money("0") }],
-});
-const orders = new Map<string, ShopifyOrder>([
-  [
-    "gid://shopify/Order/3252",
-    {
-      id: "gid://shopify/Order/3252",
-      name: "#3252",
-      createdAt: "2026-10-05T01:27:52Z",
-      presentmentCurrencyCode: "AUD",
-      paymentGatewayNames: ["shopify_payments"],
-      taxesIncluded: true,
-      shippingAddress: { countryCodeV2: "AU" },
-      totalShippingPriceSet: money("45.95"),
-      totalPriceSet: money("965.0"),
-      lineItems: {
-        nodes: [
-          li("l1", "240/100_Stepdown", "240V - 100V 50W Isolated Step-Down Transformer", "65.0"),
-          li("l2", "RM-256549-001196-140526", "Korg Wavestation A/D Synthesiser Rack", "854.05"),
-        ],
-      },
-    },
-  ],
-  [
-    "gid://shopify/Order/3254",
-    {
-      id: "gid://shopify/Order/3254",
-      name: "#3254",
-      createdAt: "2026-10-05T07:53:53Z",
-      presentmentCurrencyCode: "AUD",
-      paymentGatewayNames: ["shopify_payments"],
-      taxesIncluded: true,
-      shippingAddress: { countryCodeV2: "AU" },
-      totalShippingPriceSet: money("29.95"),
-      totalPriceSet: money("314.0"),
-      lineItems: { nodes: [li("l3", "L-060256-11-100926", "Pioneer CDJ-1000MK3", "284.05")] },
-    },
-  ],
-]);
+const resolve = fixtureResolver();
+const codes = (issues: Issue[], severity?: string) => issues.filter((i) => !severity || i.severity === severity).map((i) => i.code);
+const now = new Date("2026-10-08T06:00:00Z");
 
-const m = (a: string) => ({ amount: a, currencyCode: "AUD" });
-const txn = (id: string, type: string, amount: string, fee: string, order?: string): ShopifyBalanceTxn => ({
-  id,
-  type,
-  sourceType: type,
-  test: false,
-  transactionDate: "2026-10-05T08:00:00Z",
-  adjustmentReason: null,
-  amount: m(amount),
-  fee: m(fee),
-  net: m((Number(amount) - Number(fee)).toFixed(2)),
-  associatedOrder: order ? { id: `gid://shopify/Order/${order}`, name: `#${order}` } : null,
-});
+describe("eBay fixture payout", () => {
+  const payout = ebayFixture();
+  const report = buildReport(payout, resolve, now);
+  const line = (sku: string) => report.sales.find((l) => l.sku === sku)!;
 
-const stock: Record<string, StockItem> = {
-  "240/100_STEPDOWN": { sku: "240/100_Stepdown", ownership: "owned", acquiredFrom: "registered_supplier", source: "item" },
-  "RM-256549-001196-140526": {
-    sku: "RM-256549-001196-140526",
-    ownership: "consignment",
-    consignor: { id: 1, name: "C", gstRegistered: false, commissionType: "percent", commissionValue: 25, agreementType: "agency" },
-    source: "item",
-  },
-};
-const resolve = (sku: string | null) => (sku ? (stock[sku.toUpperCase()] ?? null) : null);
-
-describe("Shopify payout", () => {
-  const txns = [
-    txn("t1", "CHARGE", "965.00", "17.37", "3252"),
-    txn("t2", "CHARGE", "314.00", "5.65", "3254"),
-    txn("t3", "ADJUSTMENT", "-2.00", "0", undefined),
-  ];
-  const net = 965 - 17.37 + 314 - 5.65 - 2;
-  const payout = normaliseShopifyPayout(
-    { id: "p", legacyResourceId: "999", issuedAt: "2026-10-06T00:00:00Z", status: "PAID", transactionType: "DEPOSIT", net: m(net.toFixed(2)) },
-    txns,
-    orders,
-  );
-  const report = buildReport(payout, resolve, new Date("2026-10-06T00:00:00Z"));
-
-  it("rebuilds to the deposit to the cent", () => {
-    expect(report.expectedCents).toBe(report.netCents);
-    expect(report.differenceCents).toBe(0);
-    expect(report.totals.feesCents).toBe(1737 + 565);
-  });
-
-  it("splits each order into lines + shipping with the right scenarios", () => {
-    const byLine = Object.fromEntries(report.sales.map((l) => [l.lineId, l]));
-    expect(byLine["l1"]!.scenario).toBe("A1");
-    expect(byLine["l1"]!.gstCents).toBe(591); // matches Shopify's $5.91
-    expect(byLine["l2"]!.scenario).toBe("B1");
-    // 25% commission on $854.05 = $213.51; GST $19.41, not Shopify's $77.64
-    expect(byLine["l2"]!.gstCents).toBe(1941);
-    expect(byLine["l3"]!.scenario).toBe("REVIEW"); // no stock record for the CDJ
-  });
-
-  it("is flagged for review because one SKU is unknown", () => {
-    expect(report.status).toBe("needs_review");
-    expect(report.reviewCount).toBe(2); // the CDJ, and #3254's shipping that follows it
-  });
-
-  it("splits a part-paid order in proportion and warns", () => {
-    const p = normaliseShopifyPayout(
-      { id: "p", legacyResourceId: "1", issuedAt: "2026-10-06T00:00:00Z", status: "PAID", transactionType: "DEPOSIT", net: m("500.00") },
-      [txn("t1", "CHARGE", "500.00", "0", "3252")],
-      orders,
-    );
-    expect(p.sales[0]!.grossCents).toBe(50000);
-    expect(p.sales[0]!.lines.reduce((a, l) => a + l.grossCents, 0) + p.sales[0]!.shippingCents).toBe(50000);
-    expect(p.warnings.join()).toMatch(/part-paid/);
-  });
-
-  it("reverses a refund with the original scenarios", () => {
-    const p = normaliseShopifyPayout(
-      { id: "p", legacyResourceId: "2", issuedAt: "2026-10-06T00:00:00Z", status: "PAID", transactionType: "DEPOSIT", net: m("-65.00") },
-      [txn("r1", "REFUND", "-65.00", "0", "3252")],
-      orders,
-    );
-    const r = buildReport(p, resolve);
-    expect(r.differenceCents).toBe(0);
-    expect(r.refunds.reduce((a, l) => a + l.grossCents, 0)).toBe(-6500);
-  });
-});
-
-describe("eBay payout", () => {
-  const order: EbayOrder = {
-    orderId: "12-34567-89012",
-    creationDate: "2026-10-01T00:00:00Z",
-    lineItems: [
-      {
-        lineItemId: "li1",
-        sku: "240/100_Stepdown",
-        title: "Step-down transformer",
-        quantity: 1,
-        lineItemCost: { value: "65.00", currency: "AUD" },
-        deliveryCost: { shippingCost: { value: "15.00", currency: "AUD" } },
-      },
-    ],
-    fulfillmentStartInstructions: [{ shippingStep: { shipTo: { contactAddress: { countryCode: "AU" } } } }],
-  };
-  const sale: EbayTransaction = {
-    transactionId: "t1",
-    transactionType: "SALE",
-    transactionDate: "2026-10-02T00:00:00Z",
-    bookingEntry: "CREDIT",
-    amount: { value: "69.60", currency: "AUD" },
-    orderId: order.orderId,
-    totalFeeAmount: { value: "10.40", currency: "AUD" },
-    orderLineItems: [
-      {
-        lineItemId: "li1",
-        marketplaceFees: [
-          { feeType: "FINAL_VALUE_FEE", amount: { value: "10.10", currency: "AUD" } },
-          { feeType: "FINAL_VALUE_FEE_FIXED_PER_ORDER", amount: { value: "0.30", currency: "AUD" } },
-        ],
-      },
-    ],
-  };
-  const ad: EbayTransaction = {
-    transactionId: "t2",
-    transactionType: "NON_SALE_CHARGE",
-    transactionDate: "2026-10-02T00:00:00Z",
-    bookingEntry: "DEBIT",
-    amount: { value: "4.00", currency: "AUD" },
-    feeType: "AD_FEE",
-  };
-
-  it("adds sale gross back from net + fees and balances", () => {
-    const p = normaliseEbayPayout(
-      { payoutId: "5001", payoutStatus: "SUCCEEDED", payoutDate: "2026-10-03T00:00:00Z", amount: { value: "65.60", currency: "AUD" } },
-      [sale, ad],
-      new Map([[order.orderId, order]]),
-    );
-    expect(p.sales[0]!.grossCents).toBe(8000);
-    expect(p.fees.map((f) => f.type)).toEqual([
-      "ebay_final_value_fee",
-      "ebay_final_value_fee_fixed_per_order",
-      "ebay_promoted_listing_fee",
+  it("normalises sales, refunds, fees and adjustments with source IDs", () => {
+    expect(payout.sales.map((s) => s.orderId)).toEqual(["26-00001-00001", "26-00002-00002", "26-00003-00003"]);
+    expect(payout.refunds).toHaveLength(1);
+    expect(payout.fees.map((f) => [f.type, f.category, f.cents])).toEqual([
+      ["ebay_final_value_fee", "marketplace", 5252],
+      ["ebay_final_value_fee_fixed_per_order", "marketplace", 30],
+      ["ebay_final_value_fee", "marketplace", 3030],
+      ["ebay_final_value_fee", "marketplace", 2640],
+      ["ebay_international_fee", "marketplace", 360],
+      ["ebay_final_value_fee_fixed_per_order", "marketplace", 30],
+      ["ebay_final_value_fee", "marketplace", 12000],
+      ["ebay_final_value_fee_fixed_per_order", "marketplace", 30],
+      ["ebay_promoted_listing_fee", "advertising", 2550],
+      ["ebay_shipping_label", "shipping_label", 1240],
     ]);
-    const r = buildReport(p, resolve);
-    expect(r.differenceCents).toBe(0);
-    expect(r.totals.gstCents).toBe(591 + 136); // item + shipping
+    expect(payout.fees[0]!.source).toMatchObject({ platform: "ebay", payoutId: "7001", transactionId: "26-00001-00001", lineItemId: "1001", rawAmount: "52.52" });
+    expect(payout.sales[0]!.sources[0]).toMatchObject({ transactionType: "SALE", rawAmount: "736.88", rawCurrency: "AUD" });
+    expect(payout.adjustments).toEqual([
+      expect.objectContaining({ type: "CREDIT", cents: 500, supported: true }),
+    ]);
   });
 
-  it("detects eBay International Shipping and sends it to review", () => {
-    const eis: EbayOrder = {
-      ...order,
-      program: { ebayInternationalShipping: {} },
-      fulfillmentStartInstructions: [{ ebaySupportedFulfillment: true, finalDestinationAddress: { countryCode: "DE" } }],
-    };
-    const p = normaliseEbayPayout(
-      { payoutId: "5002", payoutStatus: "SUCCEEDED", payoutDate: "2026-10-03T00:00:00Z", amount: { value: "69.60", currency: "AUD" } },
-      [sale],
-      new Map([[order.orderId, eis]]),
-    );
-    expect(p.sales[0]!.shippingProgram).toBe("ebay_international");
-    expect(p.sales[0]!.destinationCountry).toBe("DE");
-    const r = buildReport(p, resolve);
-    expect(r.sales[0]!.scenario).toBe("C2");
+  it("keeps raw transactions with buyer details removed", () => {
+    expect(payout.raw.transactions).toHaveLength(7);
+    expect(JSON.stringify(payout.raw.transactions)).not.toContain("some_buyer");
+    expect(JSON.stringify(payout.raw.orders)).not.toContain("REDACTED");
+  });
+
+  it("reconstructs the payout to the cent", () => {
+    expect(report.netCents).toBe(174338);
+    expect(report.expectedCents).toBe(174338);
+    expect(report.differenceCents).toBe(0);
+    expect(report.breakdown).toEqual({
+      itemsCents: 210000,
+      shippingCents: 6000,
+      discountsCents: 5000,
+      salesGrossCents: 216000,
+      refundsCents: 15000,
+      feesByCategory: { marketplace: 23372, payment: 0, advertising: 2550, shipping_label: 1240, other: 0 },
+      feesCents: 27162,
+      adjustmentsCents: 500,
+      unsupportedCents: 0,
+    });
+  });
+
+  it("classifies every line from stock facts", () => {
+    expect(line("L-500-A").scenario).toBe("A1");
+    expect(line("L-300-B")).toMatchObject({ scenario: "A2", division66Candidate: true, discountCents: 5000, grossCents: 30000, gstCents: 2727 });
+    expect(line("L-300-B").notionalItcCents).toBe(0); // bought for $120: credit belongs to the purchase period
+    expect(line("L-NZ-1")).toMatchObject({ scenario: "C1", gstCents: 0 });
+    expect(line("RM-CONS-1")).toMatchObject({ scenario: "B1", gstCents: 2500 }); // 25% of $1,100 = $275
+    const refund = report.refunds.find((l) => l.sku === "L-REF-1")!;
+    expect(refund).toMatchObject({ scenario: "A2", grossCents: -15000, gstCents: -1364, notionalItcCents: -1364 });
+  });
+
+  it("balances and has no missing facts, but stays provisional", () => {
+    expect(codes(report.issues, "blocking")).toEqual([]);
+    expect(report.status).toBe("ready");
+    expect(report.provisional).toBe(true);
+    expect(codes(report.issues, "signoff")).toEqual(expect.arrayContaining(["unsigned_scenario", "unknown_fee_tax"]));
+  });
+
+  it("surfaces an unknown transaction type instead of hiding it", () => {
+    const p = ebayFixture((f) => {
+      f.transactions.push({
+        transactionId: "LR-1",
+        transactionType: "LOAN_REPAYMENT",
+        transactionDate: "2026-10-07T08:00:00.000Z",
+        bookingEntry: "DEBIT",
+        amount: { value: "10.00", currency: "AUD" },
+      });
+      f.payout.amount.value = "1733.38";
+    });
+    const r = buildReport(p, resolve, now);
+    expect(r.differenceCents).toBe(0);
+    expect(r.breakdown.unsupportedCents).toBe(-1000);
+    expect(r.status).toBe("needs_review");
+    expect(r.issues.find((i) => i.code === "unsupported_transaction_type")).toMatchObject({ transactionId: "LR-1", cents: -1000 });
+  });
+
+  it("a sale that doesn't match its order blocks, even though the payout balances", () => {
+    const p = ebayFixture((f) => {
+      f.transactions[0]!.amount.value = "737.88";
+      f.payout.amount.value = "1744.38";
+    });
+    const r = buildReport(p, resolve, now);
+    expect(r.differenceCents).toBe(0);
+    expect(codes(r.issues, "blocking")).toContain("sale_amount_mismatch");
     expect(r.status).toBe("needs_review");
   });
 
   it("an unexplained difference marks the payout unbalanced", () => {
-    const p = normaliseEbayPayout(
-      { payoutId: "5003", payoutStatus: "SUCCEEDED", payoutDate: "2026-10-03T00:00:00Z", amount: { value: "70.00", currency: "AUD" } },
-      [sale],
-      new Map([[order.orderId, order]]),
-    );
-    const r = buildReport(p, resolve);
-    expect(r.differenceCents).toBe(40);
+    const r = buildReport(ebayFixture((f) => void (f.payout.amount.value = "1743.40")), resolve, now);
+    expect(r.differenceCents).toBe(2);
     expect(r.status).toBe("unbalanced");
+    expect(codes(r.issues)).toContain("payout_mismatch");
+  });
+
+  it("eBay International Shipping goes to review", () => {
+    const p = ebayFixture((f) => {
+      f.orders[1]!.program = { ebayInternationalShipping: {} };
+      f.orders[1]!.fulfillmentStartInstructions = [{ ebaySupportedFulfillment: true, finalDestinationAddress: { countryCode: "DE" } }];
+    });
+    const r = buildReport(p, resolve, now);
+    expect(r.sales.find((l) => l.sku === "L-NZ-1")).toMatchObject({ scenario: "C2", approval: "review" });
+    expect(r.status).toBe("needs_review");
+  });
+
+  it("a dispute is known but always needs a person", () => {
+    const p = ebayFixture((f) => {
+      f.transactions.push({
+        transactionId: "D-1",
+        transactionType: "DISPUTE",
+        transactionDate: "2026-10-07T08:00:00.000Z",
+        bookingEntry: "DEBIT",
+        amount: { value: "50.00", currency: "AUD" },
+        orderId: "26-00001-00001",
+      });
+      f.payout.amount.value = "1693.38";
+    });
+    const r = buildReport(p, resolve, now);
+    expect(r.differenceCents).toBe(0);
+    expect(codes(r.issues, "blocking")).toEqual(["dispute"]);
+  });
+});
+
+describe("Shopify fixture payout", () => {
+  const payout = shopifyFixture();
+  const report = buildReport(payout, resolve, now);
+  const line = (sku: string) => report.sales.find((l) => l.sku === sku)!;
+
+  it("reconstructs the payout to the cent", () => {
+    expect(report.netCents).toBe(172616);
+    expect(report.differenceCents).toBe(0);
+    expect(report.breakdown).toEqual({
+      itemsCents: 177905,
+      shippingCents: 12595,
+      discountsCents: 4000,
+      salesGrossCents: 190500,
+      refundsCents: 10000,
+      feesByCategory: { marketplace: 0, payment: 6189, advertising: 0, shipping_label: 1495, other: 0 },
+      feesCents: 7684,
+      adjustmentsCents: -200,
+      unsupportedCents: 0,
+    });
+  });
+
+  it("keeps Shopify source IDs on sales, fees and adjustments", () => {
+    expect(line("L-DISC-1").sources[0]).toMatchObject({ platform: "shopify", payoutId: "9001", transactionId: "gid://shopify/ShopifyPaymentsBalanceTransaction/2", rawAmount: "380.00" });
+    expect(payout.fees.find((f) => f.type === "shopify_chargeback_fee")!.source.transactionId).toBe("gid://shopify/ShopifyPaymentsBalanceTransaction/7");
+    expect(payout.adjustments[0]!.source.transactionType).toBe("ADJUSTMENT");
+  });
+
+  it("splits multi-line orders and applies discounts per line", () => {
+    expect(line("240/100_Stepdown")).toMatchObject({ scenario: "A1", gstCents: 591 });
+    // Shopify charged $77.64 GST on the consigned Wavestation; at 25% commission the draft B1 GST is $19.41.
+    expect(line("RM-256549-001196-140526")).toMatchObject({ scenario: "B1", gstCents: 1941 });
+    expect(line("L-DISC-1")).toMatchObject({ scenario: "A1", grossCents: 36000, discountCents: 4000, gstCents: 3273 });
+    expect(line("L-NZ-2")).toMatchObject({ scenario: "C1", division66Candidate: true, gstCents: 0 });
+  });
+
+  it("reverses the refund with the original sale's scenario", () => {
+    expect(report.refunds.reduce((a, l) => a + l.grossCents, 0)).toBe(-10000);
+    expect(report.refunds[0]).toMatchObject({ sku: "L-mk3-0010230-300726", scenario: "A2" });
+  });
+
+  it("is ready and provisional", () => {
+    expect(codes(report.issues, "blocking")).toEqual([]);
+    expect(report.status).toBe("ready");
+    expect(report.provisional).toBe(true);
+  });
+
+  it("surfaces an unknown transaction type", () => {
+    const p = shopifyFixture((f) => {
+      f.transactions.push({
+        ...f.transactions[5]!,
+        id: "gid://shopify/ShopifyPaymentsBalanceTransaction/8",
+        type: "SHOP_CASH_CREDIT",
+        amount: { amount: "3.00", currencyCode: "AUD" },
+        net: { amount: "3.00", currencyCode: "AUD" },
+      });
+      f.payout.net.amount = "1729.16";
+    });
+    const r = buildReport(p, resolve, now);
+    expect(r.differenceCents).toBe(0);
+    expect(r.breakdown.unsupportedCents).toBe(300);
+    expect(codes(r.issues, "blocking")).toEqual(["unsupported_transaction_type"]);
+    expect(r.status).toBe("needs_review");
+  });
+
+  it("an order without a shipping address has an unknown destination", () => {
+    const r = buildReport(shopifyFixture((f) => void (f.orders[1]!.shippingAddress = null)), resolve, now);
+    expect(r.issues.find((i) => i.code === "unknown_destination")).toMatchObject({ orderId: "gid://shopify/Order/3260" });
+  });
+
+  it("test transactions and unmatched refunds block the payout", () => {
+    const r = buildReport(
+      shopifyFixture((f) => {
+        f.transactions[0]!.test = true;
+        f.orders.pop(); // #3250, the refunded order
+      }),
+      resolve,
+      now,
+    );
+    expect(codes(r.issues, "blocking")).toEqual(expect.arrayContaining(["test_transaction", "order_details_missing", "refund_unmatched"]));
+  });
+
+  it("splits a part-paid order in proportion and notes it", () => {
+    const p = shopifyFixture((f) => {
+      f.transactions = [{ ...f.transactions[0]!, amount: { amount: "500.00", currencyCode: "AUD" }, fee: { amount: "0.00", currencyCode: "AUD" }, net: { amount: "500.00", currencyCode: "AUD" } }];
+      f.payout.net.amount = "500.00";
+    });
+    expect(p.sales[0]!.grossCents).toBe(50000);
+    expect(p.sales[0]!.lines.reduce((a, l) => a + l.grossCents, 0) + p.sales[0]!.shippingCents).toBe(50000);
+    expect(p.warnings.join()).toMatch(/part-paid/);
+    expect(buildReport(p, resolve, now).differenceCents).toBe(0);
+  });
+});
+
+describe("both channels produce the same model", () => {
+  it("has the same keys on every normalised record", () => {
+    const e = ebayFixture();
+    const s = shopifyFixture();
+    const keys = (o: object) => Object.keys(o).sort();
+    expect(keys(e)).toEqual(keys(s));
+    expect(keys(e.sales[0]!)).toEqual(keys(s.sales[0]!));
+    expect(keys(e.sales[0]!.lines[0]!)).toEqual(keys(s.sales[0]!.lines[0]!));
+    expect(keys(e.fees[0]!)).toEqual(keys(s.fees[0]!));
+    expect(keys(e.refunds[0]!)).toEqual(keys(s.refunds[0]!));
+    expect(keys(e.adjustments[0]!)).toEqual(keys(s.adjustments[0]!));
+    expect(keys(e.fees[0]!.source)).toEqual(keys(s.fees[0]!.source));
   });
 });

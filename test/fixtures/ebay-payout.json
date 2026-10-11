@@ -1,0 +1,149 @@
+{
+  "_note": "Synthetic eBay AU payout in the shape of the Finances API (getPayout, getTransactions filter=payoutId) and Fulfillment API (getOrder). Amounts are invented; field names follow eBay's published types. The SALE amount is assumed to be net of fees (unverified on live data).",
+  "payout": {
+    "payoutId": "7001",
+    "payoutStatus": "SUCCEEDED",
+    "payoutDate": "2026-10-08T03:00:00.000Z",
+    "amount": { "value": "1743.38", "currency": "AUD" },
+    "transactionCount": 7
+  },
+  "transactions": [
+    {
+      "transactionId": "26-00001-00001",
+      "transactionType": "SALE",
+      "transactionDate": "2026-10-06T01:00:00.000Z",
+      "bookingEntry": "CREDIT",
+      "amount": { "value": "736.88", "currency": "AUD" },
+      "orderId": "26-00001-00001",
+      "payoutId": "7001",
+      "buyer": { "username": "some_buyer" },
+      "totalFeeAmount": { "value": "83.12", "currency": "AUD" },
+      "orderLineItems": [
+        { "lineItemId": "1001", "marketplaceFees": [
+          { "feeType": "FINAL_VALUE_FEE", "amount": { "value": "52.52", "currency": "AUD" } },
+          { "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER", "amount": { "value": "0.30", "currency": "AUD" } }
+        ] },
+        { "lineItemId": "1002", "marketplaceFees": [
+          { "feeType": "FINAL_VALUE_FEE", "amount": { "value": "30.30", "currency": "AUD" } }
+        ] }
+      ]
+    },
+    {
+      "transactionId": "26-00002-00002",
+      "transactionType": "SALE",
+      "transactionDate": "2026-10-06T02:00:00.000Z",
+      "bookingEntry": "CREDIT",
+      "amount": { "value": "209.70", "currency": "AUD" },
+      "orderId": "26-00002-00002",
+      "payoutId": "7001",
+      "totalFeeAmount": { "value": "30.30", "currency": "AUD" },
+      "orderLineItems": [
+        { "lineItemId": "2001", "marketplaceFees": [
+          { "feeType": "FINAL_VALUE_FEE", "amount": { "value": "26.40", "currency": "AUD" } },
+          { "feeType": "INTERNATIONAL_FEE", "amount": { "value": "3.60", "currency": "AUD" } },
+          { "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER", "amount": { "value": "0.30", "currency": "AUD" } }
+        ] }
+      ]
+    },
+    {
+      "transactionId": "26-00003-00003",
+      "transactionType": "SALE",
+      "transactionDate": "2026-10-07T02:00:00.000Z",
+      "bookingEntry": "CREDIT",
+      "amount": { "value": "979.70", "currency": "AUD" },
+      "orderId": "26-00003-00003",
+      "payoutId": "7001",
+      "totalFeeAmount": { "value": "120.30", "currency": "AUD" },
+      "orderLineItems": [
+        { "lineItemId": "3001", "marketplaceFees": [
+          { "feeType": "FINAL_VALUE_FEE", "amount": { "value": "120.00", "currency": "AUD" } },
+          { "feeType": "FINAL_VALUE_FEE_FIXED_PER_ORDER", "amount": { "value": "0.30", "currency": "AUD" } }
+        ] }
+      ]
+    },
+    {
+      "transactionId": "5000111222",
+      "transactionType": "REFUND",
+      "transactionDate": "2026-10-07T04:00:00.000Z",
+      "bookingEntry": "DEBIT",
+      "amount": { "value": "150.00", "currency": "AUD" },
+      "orderId": "26-00004-00004",
+      "payoutId": "7001"
+    },
+    {
+      "transactionId": "AD-8800",
+      "transactionType": "NON_SALE_CHARGE",
+      "transactionDate": "2026-10-07T05:00:00.000Z",
+      "bookingEntry": "DEBIT",
+      "amount": { "value": "25.50", "currency": "AUD" },
+      "feeType": "AD_FEE",
+      "transactionMemo": "Promoted listings – general",
+      "payoutId": "7001"
+    },
+    {
+      "transactionId": "SL-4410",
+      "transactionType": "SHIPPING_LABEL",
+      "transactionDate": "2026-10-07T06:00:00.000Z",
+      "bookingEntry": "DEBIT",
+      "amount": { "value": "12.40", "currency": "AUD" },
+      "orderId": "26-00001-00001",
+      "payoutId": "7001"
+    },
+    {
+      "transactionId": "CR-77",
+      "transactionType": "CREDIT",
+      "transactionDate": "2026-10-07T07:00:00.000Z",
+      "bookingEntry": "CREDIT",
+      "amount": { "value": "5.00", "currency": "AUD" },
+      "transactionMemo": "Goodwill credit",
+      "payoutId": "7001"
+    }
+  ],
+  "orders": [
+    {
+      "orderId": "26-00001-00001",
+      "creationDate": "2026-10-05T22:00:00.000Z",
+      "salesRecordReference": "9101",
+      "lineItems": [
+        { "lineItemId": "1001", "sku": "L-500-A", "title": "Roland TR-626", "quantity": 1,
+          "lineItemCost": { "value": "500.00", "currency": "AUD" },
+          "deliveryCost": { "shippingCost": { "value": "20.00", "currency": "AUD" } } },
+        { "lineItemId": "1002", "sku": "L-300-B", "title": "Boss DR-550 (second-hand)", "quantity": 1,
+          "lineItemCost": { "value": "350.00", "currency": "AUD" },
+          "discountedLineItemCost": { "value": "300.00", "currency": "AUD" },
+          "deliveryCost": { "shippingCost": { "value": "0.00", "currency": "AUD" } } }
+      ],
+      "fulfillmentStartInstructions": [ { "shippingStep": { "shipTo": { "fullName": "REDACTED", "contactAddress": { "addressLine1": "REDACTED", "countryCode": "AU" } } } } ]
+    },
+    {
+      "orderId": "26-00002-00002",
+      "creationDate": "2026-10-05T23:00:00.000Z",
+      "lineItems": [
+        { "lineItemId": "2001", "sku": "L-NZ-1", "title": "Akai MPC2000XL", "quantity": 1,
+          "lineItemCost": { "value": "200.00", "currency": "AUD" },
+          "deliveryCost": { "shippingCost": { "value": "40.00", "currency": "AUD" } } }
+      ],
+      "fulfillmentStartInstructions": [ { "shippingStep": { "shipTo": { "contactAddress": { "countryCode": "NZ" } } } } ]
+    },
+    {
+      "orderId": "26-00003-00003",
+      "creationDate": "2026-10-06T23:00:00.000Z",
+      "lineItems": [
+        { "lineItemId": "3001", "sku": "RM-CONS-1", "title": "Roland Juno-106 (consigned)", "quantity": 1,
+          "lineItemCost": { "value": "1100.00", "currency": "AUD" },
+          "deliveryCost": { "shippingCost": { "value": "0.00", "currency": "AUD" } } }
+      ],
+      "fulfillmentStartInstructions": [ { "shippingStep": { "shipTo": { "contactAddress": { "countryCode": "AU" } } } } ]
+    },
+    {
+      "orderId": "26-00004-00004",
+      "creationDate": "2026-09-20T23:00:00.000Z",
+      "lineItems": [
+        { "lineItemId": "4001", "sku": "L-REF-1", "title": "Yamaha QY70 (second-hand)", "quantity": 1,
+          "lineItemCost": { "value": "450.00", "currency": "AUD" },
+          "deliveryCost": { "shippingCost": { "value": "0.00", "currency": "AUD" } } }
+      ],
+      "fulfillmentStartInstructions": [ { "shippingStep": { "shipTo": { "contactAddress": { "countryCode": "AU" } } } } ]
+    }
+  ]
+}

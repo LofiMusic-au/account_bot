@@ -1,23 +1,34 @@
 // Cloudflare Worker entry: a morning cron that rebuilds new payouts, plus a
-// small dashboard. Milestone 1 is report-only: nothing is posted to QuickBooks.
+// small dashboard. Milestone 1 is report-only: there is no QuickBooks client
+// in this codebase, and nothing here writes to any accounting system.
 
 import { EbayClient } from "./channels/ebay";
 import { ShopifyClient } from "./channels/shopify";
 import {
   addConsignor,
+  applyOrderFacts,
+  FACT_FIELDS,
   getReport,
+  ingestPayout,
   listReports,
+  loadOrderFacts,
   loadResolver,
+  loadStoredPayout,
   reportExists,
   saveReport,
+  setConsignorGst,
+  setOrderDestination,
+  setStockFact,
+  sourceInfo,
   upsertStock,
   validateStock,
+  type FactField,
   type StockInput,
 } from "./db";
 import { toCents } from "./money";
 import { buildReport, type PayoutReport } from "./reconcile";
-import type { Channel, NormalisedPayout } from "./types";
-import { renderIndex, renderReport, renderReview, renderStockForm } from "./ui";
+import type { Channel, Issue, NormalisedPayout } from "./types";
+import { renderIndex, renderReport, renderReview, renderStockForm, type ReviewItem } from "./ui";
 
 export interface Env {
   DB: D1Database;
@@ -64,14 +75,38 @@ function sources(env: Env): Source[] {
   return out;
 }
 
-async function process(env: Env, payout: NormalisedPayout): Promise<PayoutReport> {
-  const resolve = await loadResolver(env.DB, payout);
-  const report = buildReport(payout, resolve);
-  await saveReport(env.DB, report);
+/** Classify and reconcile a stored or freshly fetched payout, applying the latest facts. */
+export async function rebuild(db: D1Database, payout: NormalisedPayout, extraIssues: Issue[] = []): Promise<PayoutReport> {
+  const withFacts = applyOrderFacts(payout, await loadOrderFacts(db, payout));
+  const p = { ...withFacts, issues: [...withFacts.issues, ...extraIssues] };
+  const report = buildReport(p, await loadResolver(db, p));
+  await saveReport(db, report);
   return report;
 }
 
-/** Fetch payouts not yet reported. `only` limits to one payout (re-run). */
+/** Store a fetched payout (idempotent) and build its report. */
+export async function ingestAndReport(db: D1Database, payout: NormalisedPayout): Promise<PayoutReport> {
+  const issues = await ingestPayout(db, payout);
+  return rebuild(db, payout, issues);
+}
+
+/** Rebuild from stored data (no platform calls). Used after staff correct a fact. */
+export async function rebuildStored(db: D1Database, channel: string, payoutId: string): Promise<PayoutReport | null> {
+  const p = await loadStoredPayout(db, channel, payoutId);
+  return p ? rebuild(db, p) : null;
+}
+
+/** Rebuild every recent payout that isn't ready, so a corrected fact shows up everywhere. */
+async function rebuildOpen(db: D1Database): Promise<number> {
+  let n = 0;
+  for (const r of await listReports(db, 60)) {
+    if (r.status === "ready") continue;
+    if (await rebuildStored(db, r.channel, r.payout_id)) n++;
+  }
+  return n;
+}
+
+/** Fetch payouts not yet reported. `only` limits to one payout (re-fetch). */
 export async function run(env: Env, only?: { channel: string; payoutId: string }): Promise<string[]> {
   const log: string[] = [];
   const srcs = sources(env);
@@ -82,18 +117,22 @@ export async function run(env: Env, only?: { channel: string; payoutId: string }
     if (only && only.channel !== s.channel) continue;
     try {
       const list = await s.list(since);
+      if (only && !list.some((p) => p.id === only.payoutId)) {
+        log.push(`${s.channel} ${only.payoutId}: not in the last ${env.LOOKBACK_DAYS} days of payouts`);
+      }
       for (const p of list) {
         if (only ? p.id !== only.payoutId : await reportExists(env.DB, s.channel, p.id)) continue;
         if (processed >= MAX_PAYOUTS_PER_RUN) {
           log.push("Run limit reached; remaining payouts will be picked up next run.");
           return log;
         }
-        const r = await process(env, await p.load());
+        const r = await ingestAndReport(env.DB, await p.load());
         processed++;
         log.push(`${s.channel} ${p.id}: ${r.status}, ${r.saleCount} sales, difference ${r.differenceCents} cents`);
       }
     } catch (e) {
-      log.push(`${s.channel}: ${(e as Error).message}`);
+      // Error text comes from the platform's response body; tokens are never part of it.
+      log.push(`${s.channel}: ${(e as Error).message.slice(0, 500)}`);
     }
   }
   if (processed === 0 && log.length === 0) log.push("No new payouts.");
@@ -102,13 +141,22 @@ export async function run(env: Env, only?: { channel: string; payoutId: string }
 
 // ------------------------------------------------------------------ routing
 
+function safeEqual(a: string, b: string): boolean {
+  const x = new TextEncoder().encode(a);
+  const y = new TextEncoder().encode(b);
+  let diff = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
+  return diff === 0;
+}
+
 function authorised(req: Request, env: Env): Response | null {
   if (!env.DASHBOARD_TOKEN) return null; // assume Cloudflare Access in front
   const url = new URL(req.url);
   const cookie = req.headers.get("Cookie") ?? "";
   const fromCookie = /(?:^|;\s*)lofi_token=([^;]+)/.exec(cookie)?.[1];
-  if (fromCookie && decodeURIComponent(fromCookie) === env.DASHBOARD_TOKEN) return null;
-  if (url.searchParams.get("token") === env.DASHBOARD_TOKEN) {
+  if (fromCookie && safeEqual(decodeURIComponent(fromCookie), env.DASHBOARD_TOKEN)) return null;
+  const q = url.searchParams.get("token");
+  if (q && safeEqual(q, env.DASHBOARD_TOKEN)) {
     url.searchParams.delete("token");
     return new Response(null, {
       status: 302,
@@ -122,6 +170,9 @@ function authorised(req: Request, env: Env): Response | null {
 }
 
 const redirect = (to: string) => new Response(null, { status: 303, headers: { Location: to } });
+const withMsg = (to: string, msg: string) => `${to}${to.includes("?") ? "&" : "?"}msg=${encodeURIComponent(msg)}`;
+/** Only same-site relative paths are allowed as a return address. */
+const safeReturn = (r: string | undefined) => (r && r.startsWith("/") && !r.startsWith("//") ? r : "/review");
 
 async function form(req: Request): Promise<Record<string, string>> {
   const fd = await req.formData();
@@ -131,10 +182,11 @@ async function form(req: Request): Promise<Record<string, string>> {
 }
 
 async function consignorList(env: Env) {
-  return (await env.DB.prepare("SELECT id, name, gst_registered FROM consignors ORDER BY name").all<{
+  return (await env.DB.prepare("SELECT id, name, gst_registered, gst_status FROM consignors ORDER BY name").all<{
     id: number;
     name: string;
     gst_registered: number;
+    gst_status: string | null;
   }>()).results;
 }
 
@@ -144,55 +196,112 @@ export default {
     if (denied) return denied;
     const url = new URL(req.url);
     const path = url.pathname;
+    const msg = url.searchParams.get("msg") ?? undefined;
 
     if (req.method === "GET" && path === "/") {
-      return renderIndex(await listReports(env.DB), url.searchParams.get("msg") ?? undefined);
+      return renderIndex(await listReports(env.DB), msg);
     }
 
     if (req.method === "POST" && path === "/run") {
       const log = await run(env);
-      return redirect(`/?msg=${encodeURIComponent(log.join(" · "))}`);
+      return redirect(withMsg("/", log.join(" · ")));
     }
 
-    const m = /^\/payout\/(ebay|shopify)\/([^/]+)(\/rerun)?$/.exec(path);
+    const m = /^\/payout\/(ebay|shopify)\/([^/]+)(?:\/(rerun|refetch|rebuild))?$/.exec(path);
     if (m) {
-      const [, channel, rawId, rerun] = m;
+      const [, channel, rawId, action] = m;
       const payoutId = decodeURIComponent(rawId!);
-      if (req.method === "POST" && rerun) {
-        const log = await run(env, { channel: channel!, payoutId });
-        return redirect(`/payout/${channel}/${encodeURIComponent(payoutId)}?msg=${encodeURIComponent(log.join(" · "))}`);
+      const back = `/payout/${channel}/${encodeURIComponent(payoutId)}`;
+      if (req.method === "POST" && action === "rebuild") {
+        const r = await rebuildStored(env.DB, channel!, payoutId);
+        return redirect(withMsg(back, r ? `Rebuilt from stored data: ${r.status}` : "No stored source data for this payout; fetch it again"));
       }
+      if (req.method === "POST" && (action === "rerun" || action === "refetch")) {
+        const log = await run(env, { channel: channel!, payoutId });
+        return redirect(withMsg(back, log.join(" · ")));
+      }
+      if (req.method !== "GET" || action) return new Response("Not found", { status: 404 });
       const r = await getReport(env.DB, channel!, payoutId);
-      return r ? renderReport(r) : new Response("Payout not found", { status: 404 });
+      if (!r) return new Response("Payout not found", { status: 404 });
+      const consignors = new Map((await consignorList(env)).map((c) => [c.id, c.name]));
+      return renderReport(r, await sourceInfo(env.DB, channel!, payoutId), msg, consignors);
     }
 
     if (req.method === "GET" && path === "/review") {
-      const rows = await listReports(env.DB, 30);
-      const items = [];
-      for (const row of rows.filter((x) => x.review_count > 0)) {
+      const rows = await listReports(env.DB, 60);
+      const items: ReviewItem[] = [];
+      const consignors = new Map((await consignorList(env)).map((c) => [c.id, c.name]));
+      for (const row of rows.filter((x) => x.status !== "ready")) {
         const r = await getReport(env.DB, row.channel, row.payout_id);
-        if (!r) continue;
-        for (const line of [...r.sales, ...r.refunds]) if (line.approval === "review") items.push({ report: r, line });
+        if (!r || !r.issues) continue;
+        for (const issue of r.issues) if (issue.severity === "blocking") items.push({ report: r, issue });
       }
-      return renderReview(items);
+      return renderReview(items, consignors, msg);
+    }
+
+    // One fact at a time, from the review queue. Facts, never tax codes.
+    if (req.method === "POST" && path === "/facts/stock") {
+      const f = await form(req);
+      const back = safeReturn(f.return);
+      try {
+        if (!f.sku || !f.field || !f.value) throw new Error("sku, field and value are required");
+        if (!Object.hasOwn(FACT_FIELDS, f.field)) throw new Error(`Unknown fact ${f.field}`);
+        await setStockFact(env.DB, f.sku, f.field as FactField, f.value, f.title);
+      } catch (e) {
+        return redirect(withMsg(back, (e as Error).message));
+      }
+      const n = await rebuildOpen(env.DB);
+      return redirect(withMsg(back, `Saved ${f.field.replace("_", " ")} for ${f.sku}; ${n} open payout(s) rebuilt`));
+    }
+
+    if (req.method === "POST" && path === "/facts/consignor") {
+      const f = await form(req);
+      const back = safeReturn(f.return);
+      const id = Number(f.id);
+      if (!Number.isInteger(id) || (f.gst !== "registered" && f.gst !== "not_registered")) {
+        return redirect(withMsg(back, "Choose registered or not registered"));
+      }
+      await setConsignorGst(env.DB, id, f.gst === "registered");
+      const n = await rebuildOpen(env.DB);
+      return redirect(withMsg(back, `Saved consignor GST status; ${n} open payout(s) rebuilt`));
+    }
+
+    if (req.method === "POST" && path === "/facts/order") {
+      const f = await form(req);
+      const back = safeReturn(f.return);
+      try {
+        if ((f.channel !== "ebay" && f.channel !== "shopify") || !f.order_id || !f.country) throw new Error("channel, order and country are required");
+        await setOrderDestination(env.DB, f.channel, f.order_id, f.country);
+      } catch (e) {
+        return redirect(withMsg(back, (e as Error).message));
+      }
+      const n = await rebuildOpen(env.DB);
+      return redirect(withMsg(back, `Saved destination ${f.country.toUpperCase()}; ${n} open payout(s) rebuilt`));
     }
 
     if (req.method === "GET" && path === "/stock/new") {
       return renderStockForm(
         { sku: url.searchParams.get("sku") ?? undefined, title: url.searchParams.get("title") ?? undefined },
         await consignorList(env),
-        url.searchParams.get("msg") ?? undefined,
+        msg,
       );
     }
 
     if (req.method === "POST" && path === "/stock") {
       const f = await form(req);
+      let purchase: number | undefined;
+      try {
+        purchase = f.purchase_aud ? toCents(f.purchase_aud.replace(/[$,]/g, "")) : undefined;
+      } catch {
+        return renderStockForm({ sku: f.sku, title: f.title }, await consignorList(env), "Purchase price isn't a valid amount");
+      }
       const input: Partial<StockInput> = {
         sku: f.sku,
         title: f.title,
         ownership: f.ownership as StockInput["ownership"],
         acquired_from: f.acquired_from as StockInput["acquired_from"],
-        purchase_cents: f.purchase_aud ? toCents(f.purchase_aud) : undefined,
+        item_condition: f.item_condition as StockInput["item_condition"],
+        purchase_cents: purchase,
         purchase_date: f.purchase_date,
         seller_name: f.seller_name,
         seller_address: f.seller_address,
@@ -205,22 +314,23 @@ export default {
       const errs = validateStock(input);
       if (errs.length) return renderStockForm({ sku: f.sku, title: f.title }, await consignorList(env), errs.join("; "));
       await upsertStock(env.DB, input as StockInput);
-      return redirect(`/stock/new?msg=${encodeURIComponent(`Saved ${input.sku}. Re-run the payout to apply it.`)}`);
+      const n = await rebuildOpen(env.DB);
+      return redirect(withMsg("/stock/new", `Saved ${input.sku}; ${n} open payout(s) rebuilt`));
     }
 
     if (req.method === "POST" && path === "/consignors") {
       const f = await form(req);
-      if (!f.name) return redirect(`/stock/new?msg=${encodeURIComponent("Consignor name is required")}`);
+      if (!f.name) return redirect(withMsg("/stock/new", "Consignor name is required"));
       await addConsignor(env.DB, {
         name: f.name,
         contact: f.contact,
-        gst_registered: f.gst_registered === "1",
+        gst_registered: f.gst_registered === "1" ? true : f.gst_registered === "0" ? false : null,
         abn: f.abn,
         commission_type: "percent",
         commission_value: f.commission_value ? Number(f.commission_value) : 0,
         agreement_type: f.agreement_type,
       });
-      return redirect(`/stock/new?msg=${encodeURIComponent(`Added consignor ${f.name}`)}`);
+      return redirect(withMsg("/stock/new", `Added consignor ${f.name}`));
     }
 
     // JSON API for scripted intake (e.g. from the legacy stock sheet).
