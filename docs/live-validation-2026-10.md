@@ -75,7 +75,16 @@ These are masked copies of live shapes in `test/fixtures/live/`. IDs are replace
 
 ## Shopify Payments
 
-**Credentials used:** a Dev Dashboard app for LOFI, authenticated with the client credentials grant (a 24-hour token). It has the Shopify Payments payout and account scopes, but **not `read_orders` yet**. So order details (SKUs, shipping, discounts, destination) couldn't be read. Every sale is held as `order_details_missing`, with Shopify's "Access denied for Order object" as the reason. Nothing is classified or guessed.
+**Credentials used:** a Dev Dashboard app for LOFI, authenticated with the client credentials grant (a 24-hour token). It now also has `read_orders`.
+
+**With order details** (four payouts, 2–8 Oct):
+- Every payout reconciles to $0.00.
+- Every CHARGE equals its order's total: line prices after discounts plus shipping.
+- The refund in the 8 October payout is matched to its earlier order and reverses that order's lines.
+- Two multi-line orders split into lines and shipping that add up.
+- An order shipped to France is classed overseas.
+- The only remaining blockers are SKUs with no stock facts.
+- No discounted order appeared in the sample, so discounts are still covered only by synthetic fixtures.
 
 | Payout date | Contents | Actual payout | Reconstructed | Difference |
 |---|---|---|---|---|
@@ -118,13 +127,9 @@ A 30-day scan found only `CHARGE` and `REFUND`. No adjustments, chargebacks, res
 
 ### Regression fixture
 
-`test/fixtures/live/shopify-charges-refund.json` is a masked copy of the 8 October payout.
+`test/fixtures/live/shopify-charges-refund.json` is a masked copy of two live payouts, with their orders. It includes a refund matched to an earlier order, multi-line orders and an export.
 
 ### Still to validate on Shopify
 
-- **Order data:** add `read_orders` to the app, release the new version and approve it on the store. Then re-run `npm run live:validate -- shopify 143669428399` to compare against the orders:
-  - items, shipping and discounts per order
-  - charges against order totals
-  - the refund's reversal against its original order
-  - destinations, including local pickup
+- **Discounted and local-pickup orders:** none appeared in this sample. Re-check when one appears. Pickup orders with no shipping address go to review for the destination, and staff can refer them.
 - **Fee GST:** the GST on the Shopify Payments fee awaits the accountant (D1).

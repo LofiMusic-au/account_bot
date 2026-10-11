@@ -223,6 +223,14 @@ type Pick =
 export function pickScenario(order: OrderSale, item: StockItem): Pick {
   const why: string[] = [];
   const dest = order.destinationCountry?.toUpperCase() ?? null;
+  if (order.destinationReferred) {
+    return {
+      scenario: "REVIEW",
+      why: [...why, "destination = referred by staff"],
+      code: "destination_referred",
+      reason: "Destination referred for manual review: staff couldn't say where the goods went",
+    };
+  }
   if (dest === null || order.shippingProgram === "unknown") {
     return {
       scenario: "REVIEW",
@@ -388,6 +396,7 @@ export function classifyLine(order: OrderSale, line: SaleLine, item: StockItem |
   const flags: string[] = [];
   const why: string[] = [
     ...(line.skuFromListing ? [`sku = none on the listing; keyed on eBay listing ID ${line.sku}`] : []),
+    ...(line.listingKey ? [`listing ${line.listingKey} linked by staff to stock SKU ${line.sku}`] : []),
     item.source === "item"
       ? `stock record ${item.sku}`
       : item.source === "convention"

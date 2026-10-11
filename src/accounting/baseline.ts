@@ -15,8 +15,8 @@
 // for accounting correctness.
 
 import { allocate } from "../money";
-import { rescaleOrder, type StockResolver } from "../rules/engine";
-import type { NormalisedPayout, OrderSale, SaleLine } from "../types";
+import { isDivision66Candidate, rescaleOrder, type StockResolver } from "../rules/engine";
+import type { FeeCategory, NormalisedPayout, OrderSale, SaleLine, StockItem } from "../types";
 import { HISTORICAL_BASELINE, type LogicalCategory } from "./categories";
 
 export interface BaselineLine {
@@ -30,6 +30,10 @@ export interface BaselineLine {
   sku: string | null;
   /** For refunds: the category being reversed. */
   reversesCategory?: LogicalCategory;
+  /** Which row of PAYOUT_CLASSIFICATION_RULES decided an item line. */
+  ruleId?: string;
+  /** Division 66: only assessed when acquisition facts exist. */
+  division66?: "candidate" | "not_applicable" | "not_assessed";
   reason: string;
   sourceTransactionId: string | null;
 }
@@ -43,24 +47,75 @@ export interface BaselineSplit {
   complete: boolean;
 }
 
-/** Category for one sold item line, from ownership and destination only. */
-export function itemCategory(order: OrderSale, line: SaleLine, resolve: StockResolver): { category: LogicalCategory; reason: string } {
-  if (line.placeholder) return { category: "UNCLASSIFIED", reason: "order details unavailable" };
-  const item = resolve(line.sku);
-  if (!item) return { category: "UNCLASSIFIED", reason: line.sku ? `ownership of ${line.sku} unknown` : "no SKU" };
-  if (item.ownership === "consignment") return { category: "CONSIGNMENT_SALES_NO_GST", reason: "consignment: full sale amount, no GST" };
+/** The facts a sold line is classified from (and nothing else). */
+export interface LineFacts {
+  orderDetailsMissing: boolean;
+  ownership: "owned" | "consignment" | null;
+  /** "referred" = staff sent the destination question to manual review. */
+  destination: "AU" | "overseas" | "unknown" | "referred";
+  ebayInternationalShipping: boolean;
+}
+
+export interface ClassificationRule {
+  id: string;
+  when: string;
+  test: (f: LineFacts) => boolean;
+  category: LogicalCategory;
+}
+
+/**
+ * THE payout classification table (historical baseline). Ordered: the first
+ * rule that matches wins. Change it only with the accountant's agreement;
+ * the tests pin every row.
+ */
+export const PAYOUT_CLASSIFICATION_RULES: readonly ClassificationRule[] = [
+  { id: "R1", when: "Order details unavailable", test: (f) => f.orderDetailsMissing, category: "UNCLASSIFIED" },
+  { id: "R2", when: "Ownership unknown (no stock record, no prefix rule, not L-)", test: (f) => f.ownership === null, category: "UNCLASSIFIED" },
+  { id: "R3", when: "Consignment, any destination", test: (f) => f.ownership === "consignment", category: "CONSIGNMENT_SALES_NO_GST" },
+  { id: "R4", when: "LOFI-owned, destination unknown or referred for review", test: (f) => f.destination === "unknown" || f.destination === "referred", category: "UNCLASSIFIED" },
+  { id: "R5", when: "LOFI-owned, sent overseas (including eBay International Shipping)", test: (f) => f.destination === "overseas", category: "SALES_OVERSEAS_NO_GST" },
+  { id: "R6", when: "LOFI-owned, sold in Australia", test: (f) => f.destination === "AU", category: "SALES_DOMESTIC_GST" },
+];
+
+/** Fee categories by channel. Configured, not inferred. */
+export const FEE_CATEGORY_MAP: Record<"ebay" | "shopify", Record<FeeCategory, LogicalCategory>> = {
+  ebay: { marketplace: "EBAY_FEES", payment: "EBAY_FEES", advertising: "EBAY_FEES", shipping_label: "EBAY_FEES", other: "EBAY_FEES" },
+  shopify: { marketplace: "SHOPIFY_FEES", payment: "SHOPIFY_FEES", advertising: "SHOPIFY_FEES", shipping_label: "SHOPIFY_FEES", other: "SHOPIFY_FEES" },
+};
+
+export function lineFacts(order: OrderSale, line: SaleLine, item: StockItem | null): LineFacts {
   const dest = order.destinationCountry?.toUpperCase() ?? null;
-  if (dest === null || order.shippingProgram === "unknown") return { category: "UNCLASSIFIED", reason: "destination unknown" };
-  if (dest !== "AU") {
-    return {
-      category: "SALES_OVERSEAS_NO_GST",
-      reason:
-        order.shippingProgram === "ebay_international"
-          ? "LOFI-owned, sold overseas via eBay International Shipping (historical treatment; C2 still unresolved)"
-          : `LOFI-owned, sold to ${dest}`,
-    };
-  }
-  return { category: "SALES_DOMESTIC_GST", reason: "LOFI-owned, sold in Australia" };
+  return {
+    orderDetailsMissing: !!line.placeholder,
+    ownership: item?.ownership ?? null,
+    destination: order.destinationReferred
+      ? "referred"
+      : dest === null || order.shippingProgram === "unknown"
+        ? "unknown"
+        : dest === "AU"
+          ? "AU"
+          : "overseas",
+    ebayInternationalShipping: order.shippingProgram === "ebay_international",
+  };
+}
+
+/** Division 66 status of a line: only assessed when acquisition facts exist. */
+export function division66Status(item: StockItem | null): "candidate" | "not_applicable" | "not_assessed" {
+  if (!item || item.ownership !== "owned") return item ? "not_applicable" : "not_assessed";
+  if (!item.acquiredFrom) return "not_assessed";
+  if (item.acquiredFrom === "registered_supplier") return "not_applicable";
+  if (item.acquiredFrom === "other") return "not_assessed";
+  if (!item.condition) return "not_assessed";
+  return isDivision66Candidate(item) ? "candidate" : "not_applicable";
+}
+
+/** Category for one sold item line: the first matching rule in the table. */
+export function itemCategory(order: OrderSale, line: SaleLine, resolve: StockResolver): { category: LogicalCategory; reason: string; ruleId: string } {
+  const item = line.placeholder ? null : resolve(line.sku);
+  const f = lineFacts(order, line, item);
+  const rule = PAYOUT_CLASSIFICATION_RULES.find((r) => r.test(f))!;
+  const extra = f.ebayInternationalShipping && rule.id === "R5" ? " (C2 still unresolved in the draft scenarios)" : "";
+  return { category: rule.category, reason: `${rule.id}: ${rule.when}${extra}`, ruleId: rule.id };
 }
 
 /**
@@ -71,7 +126,8 @@ export function itemCategory(order: OrderSale, line: SaleLine, resolve: StockRes
 function orderLines(order: OrderSale, resolve: StockResolver, sourceTransactionId: string | null): BaselineLine[] {
   const items: BaselineLine[] = order.lines.map((l) => {
     const c = itemCategory(order, l, resolve);
-    return { ...c, cents: l.grossCents, kind: "item", orderId: order.orderId, orderName: order.orderName, lineId: l.lineId, sku: l.sku, sourceTransactionId };
+    const d66 = division66Status(l.placeholder ? null : resolve(l.sku));
+    return { ...c, division66: d66, cents: l.grossCents, kind: "item", orderId: order.orderId, orderName: order.orderName, lineId: l.lineId, sku: l.sku, sourceTransactionId };
   });
   if (order.shippingCents === 0) return items;
   const parts = allocate(order.shippingCents, items.map((i) => Math.abs(i.cents)));
@@ -121,7 +177,7 @@ export function baselineSplit(payout: NormalisedPayout, resolve: StockResolver):
   }
   for (const f of payout.fees) {
     lines.push({
-      category: payout.channel === "ebay" ? "EBAY_FEES" : "SHOPIFY_FEES",
+      category: FEE_CATEGORY_MAP[payout.channel][f.category],
       cents: -f.cents,
       kind: "fee",
       orderId: f.orderId,

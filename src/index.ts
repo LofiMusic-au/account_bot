@@ -8,6 +8,10 @@ import {
   addConsignor,
   clearPayouts,
   applyOrderFacts,
+  applyListingMap,
+  loadListingMap,
+  linkListing,
+  referOrderDestination,
   FACT_FIELDS,
   getReport,
   ingestPayout,
@@ -44,7 +48,7 @@ import { toCents } from "./money";
 import { consignmentEntries, type BasTreatment, type PartyRole } from "./accounting/consignment";
 import { buildReport, type PayoutReport } from "./reconcile";
 import type { Channel, Issue, NormalisedPayout } from "./types";
-import { renderConsignments, renderIndex, renderReport, renderReview, renderStockForm, type ConsignorOption, type ReviewItem } from "./ui";
+import { renderConsignments, renderRules, renderIndex, renderReport, renderReview, renderStockForm, type ConsignorOption, type ReviewItem } from "./ui";
 
 export interface Env {
   DB: D1Database;
@@ -103,7 +107,7 @@ function sources(env: Env): Source[] {
 
 /** Classify and reconcile a stored or freshly fetched payout, applying the latest facts. */
 export async function rebuild(db: D1Database, payout: NormalisedPayout, extraIssues: Issue[] = []): Promise<PayoutReport> {
-  const withFacts = applyOrderFacts(payout, await loadOrderFacts(db, payout));
+  const withFacts = applyListingMap(applyOrderFacts(payout, await loadOrderFacts(db, payout)), await loadListingMap(db, payout));
   const p = { ...withFacts, issues: [...withFacts.issues, ...extraIssues] };
   const resolve = await loadResolver(db, p);
   const report = buildReport(p, resolve);
@@ -256,6 +260,8 @@ export default {
     if (req.method === "GET" && path === "/") {
       return renderIndex(await listReports(env.DB, 60, channelFilter), msg, canReset, channelFilter);
     }
+
+    if (req.method === "GET" && path === "/rules") return renderRules();
 
     if (req.method === "GET" && path === "/consignments") {
       const qp = url.searchParams.get("period");
@@ -436,12 +442,29 @@ export default {
       const f = await form(req);
       const back = safeReturn(f.return);
       try {
-        if ((f.channel !== "ebay" && f.channel !== "shopify") || !f.order_id || !f.country) throw new Error("channel, order and country are required");
+        if ((f.channel !== "ebay" && f.channel !== "shopify") || !f.order_id) throw new Error("channel and order are required");
+        if (f.refer === "1") {
+          await referOrderDestination(env.DB, f.channel, f.order_id);
+          return redirect(withMsg(back, afterSave("Referred the destination for manual review", await rebuildOpen(env.DB))));
+        }
+        if (!f.country) throw new Error("Choose a destination");
         await setOrderDestination(env.DB, f.channel, f.order_id, f.country);
       } catch (e) {
         return redirect(withMsg(back, (e as Error).message));
       }
       return redirect(withMsg(back, afterSave(`Saved destination ${f.country.toUpperCase()}`, await rebuildOpen(env.DB))));
+    }
+
+    if (req.method === "POST" && path === "/facts/listing") {
+      const f = await form(req);
+      const back = safeReturn(f.return);
+      try {
+        if ((f.channel !== "ebay" && f.channel !== "shopify") || !f.listing_key) throw new Error("listing is required");
+        await linkListing(env.DB, f.channel, f.listing_key, f.sku ?? "");
+      } catch (e) {
+        return redirect(withMsg(back, `Not saved: ${(e as Error).message}`));
+      }
+      return redirect(withMsg(back, afterSave(`Linked ${f.listing_key} to ${f.sku}`, await rebuildOpen(env.DB))));
     }
 
     if (req.method === "GET" && path === "/stock/new") {

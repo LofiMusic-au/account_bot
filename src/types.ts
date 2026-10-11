@@ -66,6 +66,8 @@ export interface SaleLine {
   placeholder?: boolean;
   /** The listing has no SKU; `sku` is the platform listing ID (e.g. EBAY-ITEM-123). */
   skuFromListing?: boolean;
+  /** Set when staff linked this SKU-less listing to a real stock SKU: the original listing key. */
+  listingKey?: string;
 }
 
 export interface OrderSale {
@@ -76,6 +78,8 @@ export interface OrderSale {
   destinationCountry: string | null;
   /** "staff" when a person recorded the destination because the platform didn't send one. */
   destinationSource?: "platform" | "staff";
+  /** Staff couldn't say where the goods went and referred it for manual review. */
+  destinationReferred?: boolean;
   shippingProgram: ShippingProgram;
   /** Currency the buyer paid in, when not AUD (C4). */
   buyerCurrency: string | null;
@@ -163,6 +167,7 @@ export type IssueCode =
   | "unknown_commission"
   | "unknown_purchase_price"
   | "unknown_destination"
+  | "destination_referred"
   | "unresolved_scenario"
   | "manual_review"
   | "unknown_fee_tax"

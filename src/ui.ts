@@ -5,6 +5,7 @@ import { FEE_CATEGORIES, REPORT_VERSION, saleScenarioCounts, type PayoutReport }
 import type { ReportSummary, SourceInfo } from "./db";
 import type { Channel, FeeCategory, Issue, LineClassification, SourceRef } from "./types";
 import { CATEGORIES, HISTORICAL_BASELINE, type LogicalCategory } from "./accounting/categories";
+import { FEE_CATEGORY_MAP, PAYOUT_CLASSIFICATION_RULES } from "./accounting/baseline";
 import { periodTotals, type SettlementRule } from "./accounting/consignment";
 import type { ConsignmentRow } from "./db";
 
@@ -36,6 +37,7 @@ const ISSUE_LABEL: Record<string, string> = {
   unknown_commission: "Commission rate unknown",
   unknown_purchase_price: "Purchase price unknown",
   unknown_destination: "Destination unknown",
+  destination_referred: "Destination referred for review",
   unresolved_scenario: "Treatment not decided",
   manual_review: "Needs a person",
   unknown_fee_tax: "Fee GST treatment pending",
@@ -90,7 +92,7 @@ form.factform{display:flex;flex-wrap:wrap;gap:6px;align-items:center}form.factfo
 input.money{width:7em}input.pct{width:5em}details.prefix{flex-basis:100%}details.prefix summary{font-size:12px}
 label.inline{display:inline-flex;flex-direction:row;align-items:center;gap:6px;color:var(--fg)}
 </style></head><body>
-<header><b>LOFI payout reconciliation</b><a href="/">Payouts</a><a href="/review">Review queue</a><a href="/consignments">Consignments (shadow)</a><a href="/stock/new">Add stock record</a>
+<header><b>LOFI payout reconciliation</b><a href="/">Payouts</a><a href="/review">Review queue</a><a href="/consignments">Consignments (shadow)</a><a href="/rules">Rules</a><a href="/stock/new">Add stock record</a>
 <span class="muted" style="margin-left:auto">Report-only · nothing is posted to QuickBooks</span></header>
 <main>${body}</main></body></html>`;
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -214,7 +216,9 @@ ${options.map(([v, label]) => `<button class="alt" name="value" value="${esc(v)}
 <form class="inline" method="post" action="/facts/order">${hidden("channel", channel)}${hidden("order_id", issue.orderId)}${hidden("return", back)}
 <button class="alt" name="country" value="AU">Australia / local pickup</button></form>
 <form class="inline" method="post" action="/facts/order">${hidden("channel", channel)}${hidden("order_id", issue.orderId)}${hidden("return", back)}
-<input class="cc" name="country" placeholder="NZ" maxlength="2" required><button class="alt">Overseas</button></form>`
+<input class="cc" name="country" placeholder="NZ" maxlength="2" required><button class="alt">Overseas</button></form>
+<form class="inline" method="post" action="/facts/order">${hidden("channel", channel)}${hidden("order_id", issue.orderId)}${hidden("return", back)}
+<button class="alt" name="refer" value="1">Not sure: refer for review</button></form>`
         : "";
     case "unknown_sku":
     case "unknown_consignor":
@@ -333,9 +337,27 @@ function baselineSection(r: PayoutReport): string {
     })
     .join("");
   return `<h2>Historical baseline split</h2>
-<p class="muted small">How staff split this payout by hand: by ownership and destination only. Consignment sales go in full at no GST, and their commission is handled in the consignment ledger. Jess's manual ledger is the source of truth for that; the <a href="/consignments">shadow ledger</a> here is a comparison only. This is LOFI's current method, <b>not</b> an accountant-approved treatment. ${b.complete ? `<span class="ready">Every line is categorised.</span>` : `<span class="review">${b.unclassifiedCount} line(s) not categorised yet.</span>`}</p>
+<p class="muted small">How staff split this payout by hand: by ownership and destination only (<a href="/rules">the rules</a>). Consignment sales go in full at no GST, and their commission is handled in the consignment ledger. Jess's manual ledger is the source of truth for that; the <a href="/consignments">shadow ledger</a> here is a comparison only. This is LOFI's current method, <b>not</b> an accountant-approved treatment. ${b.complete ? `<span class="ready">Every line is categorised.</span>` : `<span class="review">${b.unclassifiedCount} line(s) not categorised yet.</span>`}</p>
 <div class="wrap"><table><tr><th>Category</th><th>Historical QuickBooks account</th><th class="n">Amount</th></tr>${rows}
 <tr class="total"><td>Total (equals the reconstructed payout)</td><td></td><td class="n">${fmt(b.sumCents)}</td></tr></table></div>`;
+}
+
+export function renderRules(): Response {
+  const body = `<h1>Payout classification rules</h1>
+<p class="muted">How every payout line is categorised under the historical baseline, which is LOFI's current manual method and not accountant-approved. The rules are checked in order and the first match wins. A line that matches nothing certain stays <b>UNCLASSIFIED</b> and its missing fact goes to the review queue. Nothing is guessed.</p>
+<h2>Sold items and shipping</h2>
+<div class="wrap"><table><tr><th>Rule</th><th>When</th><th>Category</th><th>Historical account</th></tr>
+${PAYOUT_CLASSIFICATION_RULES.map((r) => `<tr><td><b>${esc(r.id)}</b></td><td>${esc(r.when)}</td><td><code>${esc(r.category)}</code></td><td class="small">${esc(CATEGORIES[r.category].historicalAccount ?? "—")}</td></tr>`).join("")}
+</table></div>
+<p class="muted small">Shipping charged to the buyer follows the order's items. On a mixed order it's shared across the item categories in proportion. Ownership comes from the item's stock record, a SKU prefix rule, or the <code>L-</code> convention (LOFI-owned). Division 66 is shown per line as <i>not assessed</i> unless the item's acquisition source and condition are recorded.</p>
+<h2>Refunds, fees and adjustments</h2>
+<div class="wrap"><table><tr><th>Line</th><th>Category</th></tr>
+<tr><td>Refund</td><td><code>REFUND</code>, recording the category it reverses (worked out by the rules above on the original order)</td></tr>
+${(["ebay", "shopify"] as const).map((ch) => Object.entries(FEE_CATEGORY_MAP[ch]).map(([fc, cat]) => `<tr><td>${ch === "ebay" ? "eBay" : "Shopify"} fee: ${esc(fc.replace("_", " "))}</td><td><code>${esc(cat)}</code></td></tr>`).join("")).join("")}
+<tr><td>Supported adjustment or credit</td><td><code>MARKETPLACE_ADJUSTMENTS</code></td></tr>
+<tr><td>Unsupported transaction type</td><td><code>UNCLASSIFIED</code> (blocks the payout)</td></tr>
+</table></div>`;
+  return page("Rules", body);
 }
 
 export interface ConsignmentsPage {
@@ -520,7 +542,7 @@ const FACT_CODES = new Set([
   "unknown_purchase_price",
   "unknown_destination",
 ]);
-const ACCOUNTING_CODES = new Set(["unresolved_scenario", "manual_review", "dispute"]);
+const ACCOUNTING_CODES = new Set(["unresolved_scenario", "manual_review", "dispute", "destination_referred"]);
 export const issueGroup = (i: Issue): IssueGroup =>
   FACT_CODES.has(i.code) ? "facts" : ACCOUNTING_CODES.has(i.code) ? "accounting" : "integration";
 /** SKU-level fact problems are fixed with one form per SKU. */
@@ -595,7 +617,13 @@ function factForm(g: Group, d: ReviewData, back: string, skusInQueue: string[]):
   const suggestion = suggestPrefix(sku);
   const others = suggestion ? skusInQueue.filter((x) => x.toUpperCase() !== sku.toUpperCase() && x.toUpperCase().startsWith(suggestion.toUpperCase())).length : 0;
   const hidden = (k: string, val: unknown) => `<input type="hidden" name="${k}" value="${esc(val)}">`;
-  return `<form class="factform" method="post" action="/facts/item">${hidden("sku", sku)}${hidden("title", g.title ?? "")}${hidden("return", back)}
+  const listingLink = /^EBAY-ITEM-/i.test(sku)
+    ? `<form class="factform" method="post" action="/facts/listing">${hidden("channel", g.channel)}${hidden("listing_key", sku)}${hidden("return", back)}
+<span class="small">This listing has no SKU on eBay. If it's a stock item you already know, link it:</span>
+<input name="sku" placeholder="Stock SKU, e.g. L-…" aria-label="Stock SKU for this listing"><button class="alt">Link listing</button></form>
+<div class="muted small">…or record its facts directly:</div>`
+    : "";
+  return `${listingLink}<form class="factform" method="post" action="/facts/item">${hidden("sku", sku)}${hidden("title", g.title ?? "")}${hidden("return", back)}
 ${sel("ownership", v.ownership, [["", "Ownership?"], ["owned", "LOFI-owned"], ["consignment", "Consignment"]])}
 ${sel("acquired_from", v.acquired_from, [["", "Acquired from?"], ["registered_supplier", "GST-registered supplier"], ["private_seller", "Private / non-GST seller"], ["trade_in", "Trade-in"], ["other", "Other"]])}
 ${sel("item_condition", v.item_condition, [["", "Condition?"], ["new", "New"], ["secondhand", "Second-hand"]])}

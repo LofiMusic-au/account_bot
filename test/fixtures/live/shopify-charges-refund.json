@@ -1,89 +1,721 @@
 {
- "_note": "Masked from a live Shopify Payments payout (2026-10-08): 2 charges and a refund. gids, order numbers and payout IDs replaced; amounts, types and field shapes kept. Balance transactions carry no buyer data.",
- "payout": {
-  "id": "gid://shopify/ShopifyPaymentsPayout/9900001",
-  "legacyResourceId": "9900001",
-  "issuedAt": "2026-10-08T00:00:00Z",
-  "status": "PAID",
-  "transactionType": "DEPOSIT",
-  "net": {
-   "amount": "338.23",
-   "currencyCode": "AUD"
-  }
- },
- "transactions": [
+ "_note": "Masked from two live Shopify Payments payouts (Oct 2026) with order details: charges, a refund matched to its earlier order, multi-line orders and an export to France. gids, order numbers and payout IDs replaced; amounts, SKUs, types and field shapes kept. The order query asks for no names, emails or addresses.",
+ "payouts": [
   {
-   "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/990001",
-   "type": "CHARGE",
-   "sourceType": "CHARGE",
-   "test": false,
-   "transactionDate": "2026-10-05T14:22:14Z",
-   "adjustmentReason": null,
-   "amount": {
-    "amount": "66.95",
-    "currencyCode": "AUD"
+   "payout": {
+    "id": "gid://shopify/ShopifyPaymentsPayout/991",
+    "legacyResourceId": "991",
+    "issuedAt": "2026-10-08T00:00:00Z",
+    "status": "PAID",
+    "transactionType": "DEPOSIT",
+    "net": {
+     "amount": "338.23",
+     "currencyCode": "AUD"
+    }
    },
-   "fee": {
-    "amount": "2.64",
-    "currencyCode": "AUD"
-   },
-   "net": {
-    "amount": "64.31",
-    "currencyCode": "AUD"
-   },
-   "associatedOrder": {
-    "id": "gid://shopify/Order/99001",
-    "name": "#LIVE-1"
-   }
+   "transactions": [
+    {
+     "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/991",
+     "type": "CHARGE",
+     "sourceType": "CHARGE",
+     "test": false,
+     "transactionDate": "2026-10-05T14:22:14Z",
+     "adjustmentReason": null,
+     "amount": {
+      "amount": "66.95",
+      "currencyCode": "AUD"
+     },
+     "fee": {
+      "amount": "2.64",
+      "currencyCode": "AUD"
+     },
+     "net": {
+      "amount": "64.31",
+      "currencyCode": "AUD"
+     },
+     "associatedOrder": {
+      "id": "gid://shopify/Order/9901",
+      "name": "#LIVE-1"
+     }
+    },
+    {
+     "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/992",
+     "type": "CHARGE",
+     "sourceType": "CHARGE",
+     "test": false,
+     "transactionDate": "2026-10-06T05:41:28Z",
+     "adjustmentReason": null,
+     "amount": {
+      "amount": "284.05",
+      "currencyCode": "AUD"
+     },
+     "fee": {
+      "amount": "5.13",
+      "currencyCode": "AUD"
+     },
+     "net": {
+      "amount": "278.92",
+      "currencyCode": "AUD"
+     },
+     "associatedOrder": {
+      "id": "gid://shopify/Order/9902",
+      "name": "#LIVE-2"
+     }
+    },
+    {
+     "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/993",
+     "type": "REFUND",
+     "sourceType": "REFUND",
+     "test": false,
+     "transactionDate": "2026-10-07T04:10:46Z",
+     "adjustmentReason": null,
+     "amount": {
+      "amount": "-5.0",
+      "currencyCode": "AUD"
+     },
+     "fee": {
+      "amount": "0.0",
+      "currencyCode": "AUD"
+     },
+     "net": {
+      "amount": "-5.0",
+      "currencyCode": "AUD"
+     },
+     "associatedOrder": {
+      "id": "gid://shopify/Order/9903",
+      "name": "#LIVE-3"
+     }
+    }
+   ],
+   "orders": [
+    {
+     "id": "gid://shopify/Order/9901",
+     "name": "#LIVE-1",
+     "createdAt": "2026-10-05T14:22:16Z",
+     "presentmentCurrencyCode": "AUD",
+     "paymentGatewayNames": [
+      "shopify_payments"
+     ],
+     "taxesIncluded": true,
+     "shippingAddress": {
+      "countryCodeV2": "FR"
+     },
+     "totalShippingPriceSet": {
+      "shopMoney": {
+       "amount": "35.0"
+      }
+     },
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "66.95"
+      }
+     },
+     "lineItems": {
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/991",
+        "sku": "Yamaha-cmxiikit",
+        "name": "Yamaha CMXII / MT2X Multitrack Cassette Recorder Service Spare Parts Belt Kit",
+        "quantity": 1,
+        "originalTotalSet": {
+         "shopMoney": {
+          "amount": "31.95"
+         }
+        },
+        "discountAllocations": [],
+        "taxLines": []
+       }
+      ]
+     }
+    },
+    {
+     "id": "gid://shopify/Order/9902",
+     "name": "#LIVE-2",
+     "createdAt": "2026-10-06T05:41:31Z",
+     "presentmentCurrencyCode": "AUD",
+     "paymentGatewayNames": [
+      "shopify_payments"
+     ],
+     "taxesIncluded": true,
+     "shippingAddress": {
+      "countryCodeV2": "AU"
+     },
+     "totalShippingPriceSet": {
+      "shopMoney": {
+       "amount": "0.0"
+      }
+     },
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "284.05"
+      }
+     },
+     "lineItems": {
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/992",
+        "sku": "L-srjv80-13-170926",
+        "name": "Roland SR-JV80-13 Vocal Collection Expansion Board JV-1080 JV-2080 JD-990",
+        "quantity": 1,
+        "originalTotalSet": {
+         "shopMoney": {
+          "amount": "284.05"
+         }
+        },
+        "discountAllocations": [],
+        "taxLines": [
+         {
+          "priceSet": {
+           "shopMoney": {
+            "amount": "25.82"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "gid://shopify/Order/9903",
+     "name": "#LIVE-3",
+     "createdAt": "2026-09-30T04:15:24Z",
+     "presentmentCurrencyCode": "AUD",
+     "paymentGatewayNames": [
+      "shopify_payments"
+     ],
+     "taxesIncluded": true,
+     "shippingAddress": {
+      "countryCodeV2": "AU"
+     },
+     "totalShippingPriceSet": {
+      "shopMoney": {
+       "amount": "13.95"
+      }
+     },
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "78.95"
+      }
+     },
+     "lineItems": {
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/993",
+        "sku": "240/100_Stepdown",
+        "name": "240V - 100V 50W Isolated Step-Down Transformer Use Japanese Gear In Australia",
+        "quantity": 1,
+        "originalTotalSet": {
+         "shopMoney": {
+          "amount": "65.0"
+         }
+        },
+        "discountAllocations": [],
+        "taxLines": [
+         {
+          "priceSet": {
+           "shopMoney": {
+            "amount": "5.91"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
   },
   {
-   "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/990002",
-   "type": "CHARGE",
-   "sourceType": "CHARGE",
-   "test": false,
-   "transactionDate": "2026-10-06T05:41:28Z",
-   "adjustmentReason": null,
-   "amount": {
-    "amount": "284.05",
-    "currencyCode": "AUD"
+   "payout": {
+    "id": "gid://shopify/ShopifyPaymentsPayout/992",
+    "legacyResourceId": "992",
+    "issuedAt": "2026-10-07T00:00:00Z",
+    "status": "PAID",
+    "transactionType": "DEPOSIT",
+    "net": {
+     "amount": "2609.24",
+     "currencyCode": "AUD"
+    }
    },
-   "fee": {
-    "amount": "5.13",
-    "currencyCode": "AUD"
-   },
-   "net": {
-    "amount": "278.92",
-    "currencyCode": "AUD"
-   },
-   "associatedOrder": {
-    "id": "gid://shopify/Order/99002",
-    "name": "#LIVE-2"
-   }
-  },
-  {
-   "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/990003",
-   "type": "REFUND",
-   "sourceType": "REFUND",
-   "test": false,
-   "transactionDate": "2026-10-07T04:10:46Z",
-   "adjustmentReason": null,
-   "amount": {
-    "amount": "-5.0",
-    "currencyCode": "AUD"
-   },
-   "fee": {
-    "amount": "0.0",
-    "currencyCode": "AUD"
-   },
-   "net": {
-    "amount": "-5.0",
-    "currencyCode": "AUD"
-   },
-   "associatedOrder": {
-    "id": "gid://shopify/Order/99003",
-    "name": "#LIVE-3"
-   }
+   "transactions": [
+    {
+     "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/994",
+     "type": "CHARGE",
+     "sourceType": "CHARGE",
+     "test": false,
+     "transactionDate": "2026-10-02T23:02:31Z",
+     "adjustmentReason": null,
+     "amount": {
+      "amount": "78.95",
+      "currencyCode": "AUD"
+     },
+     "fee": {
+      "amount": "1.64",
+      "currencyCode": "AUD"
+     },
+     "net": {
+      "amount": "77.31",
+      "currencyCode": "AUD"
+     },
+     "associatedOrder": {
+      "id": "gid://shopify/Order/9904",
+      "name": "#LIVE-4"
+     }
+    },
+    {
+     "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/995",
+     "type": "CHARGE",
+     "sourceType": "CHARGE",
+     "test": false,
+     "transactionDate": "2026-10-03T01:51:15Z",
+     "adjustmentReason": null,
+     "amount": {
+      "amount": "1178.0",
+      "currencyCode": "AUD"
+     },
+     "fee": {
+      "amount": "20.33",
+      "currencyCode": "AUD"
+     },
+     "net": {
+      "amount": "1157.67",
+      "currencyCode": "AUD"
+     },
+     "associatedOrder": {
+      "id": "gid://shopify/Order/9905",
+      "name": "#LIVE-5"
+     }
+    },
+    {
+     "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/996",
+     "type": "CHARGE",
+     "sourceType": "CHARGE",
+     "test": false,
+     "transactionDate": "2026-10-03T01:55:02Z",
+     "adjustmentReason": null,
+     "amount": {
+      "amount": "74.35",
+      "currencyCode": "AUD"
+     },
+     "fee": {
+      "amount": "1.56",
+      "currencyCode": "AUD"
+     },
+     "net": {
+      "amount": "72.79",
+      "currencyCode": "AUD"
+     },
+     "associatedOrder": {
+      "id": "gid://shopify/Order/9906",
+      "name": "#LIVE-6"
+     }
+    },
+    {
+     "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/997",
+     "type": "CHARGE",
+     "sourceType": "CHARGE",
+     "test": false,
+     "transactionDate": "2026-10-05T01:27:48Z",
+     "adjustmentReason": null,
+     "amount": {
+      "amount": "965.0",
+      "currencyCode": "AUD"
+     },
+     "fee": {
+      "amount": "16.71",
+      "currencyCode": "AUD"
+     },
+     "net": {
+      "amount": "948.29",
+      "currencyCode": "AUD"
+     },
+     "associatedOrder": {
+      "id": "gid://shopify/Order/9907",
+      "name": "#LIVE-7"
+     }
+    },
+    {
+     "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/998",
+     "type": "CHARGE",
+     "sourceType": "CHARGE",
+     "test": false,
+     "transactionDate": "2026-10-05T03:21:03Z",
+     "adjustmentReason": null,
+     "amount": {
+      "amount": "45.9",
+      "currencyCode": "AUD"
+     },
+     "fee": {
+      "amount": "1.08",
+      "currencyCode": "AUD"
+     },
+     "net": {
+      "amount": "44.82",
+      "currencyCode": "AUD"
+     },
+     "associatedOrder": {
+      "id": "gid://shopify/Order/9908",
+      "name": "#LIVE-8"
+     }
+    },
+    {
+     "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/999",
+     "type": "CHARGE",
+     "sourceType": "CHARGE",
+     "test": false,
+     "transactionDate": "2026-10-05T07:53:51Z",
+     "adjustmentReason": null,
+     "amount": {
+      "amount": "314.0",
+      "currencyCode": "AUD"
+     },
+     "fee": {
+      "amount": "5.64",
+      "currencyCode": "AUD"
+     },
+     "net": {
+      "amount": "308.36",
+      "currencyCode": "AUD"
+     },
+     "associatedOrder": {
+      "id": "gid://shopify/Order/9909",
+      "name": "#LIVE-9"
+     }
+    }
+   ],
+   "orders": [
+    {
+     "id": "gid://shopify/Order/9904",
+     "name": "#LIVE-4",
+     "createdAt": "2026-10-02T23:02:35Z",
+     "presentmentCurrencyCode": "AUD",
+     "paymentGatewayNames": [
+      "shopify_payments"
+     ],
+     "taxesIncluded": true,
+     "shippingAddress": {
+      "countryCodeV2": "AU"
+     },
+     "totalShippingPriceSet": {
+      "shopMoney": {
+       "amount": "13.95"
+      }
+     },
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "78.95"
+      }
+     },
+     "lineItems": {
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/994",
+        "sku": "240/100_Stepdown",
+        "name": "240V - 100V 50W Isolated Step-Down Transformer Use Japanese Gear In Australia",
+        "quantity": 1,
+        "originalTotalSet": {
+         "shopMoney": {
+          "amount": "65.0"
+         }
+        },
+        "discountAllocations": [],
+        "taxLines": [
+         {
+          "priceSet": {
+           "shopMoney": {
+            "amount": "5.91"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "gid://shopify/Order/9905",
+     "name": "#LIVE-5",
+     "createdAt": "2026-10-03T01:51:17Z",
+     "presentmentCurrencyCode": "AUD",
+     "paymentGatewayNames": [
+      "shopify_payments"
+     ],
+     "taxesIncluded": true,
+     "shippingAddress": {
+      "countryCodeV2": "AU"
+     },
+     "totalShippingPriceSet": {
+      "shopMoney": {
+       "amount": "38.95"
+      }
+     },
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "1178.0"
+      }
+     },
+     "lineItems": {
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/995",
+        "sku": "L-mk3-0010230-300726",
+        "name": "Tascam Portastudio 424 MKIII Multitrack Cassette Tape Recorder Mixer - Serviced!",
+        "quantity": 1,
+        "originalTotalSet": {
+         "shopMoney": {
+          "amount": "1139.05"
+         }
+        },
+        "discountAllocations": [],
+        "taxLines": [
+         {
+          "priceSet": {
+           "shopMoney": {
+            "amount": "103.55"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "gid://shopify/Order/9906",
+     "name": "#LIVE-6",
+     "createdAt": "2026-10-03T01:55:04Z",
+     "presentmentCurrencyCode": "AUD",
+     "paymentGatewayNames": [
+      "shopify_payments"
+     ],
+     "taxesIncluded": true,
+     "shippingAddress": {
+      "countryCodeV2": "AU"
+     },
+     "totalShippingPriceSet": {
+      "shopMoney": {
+       "amount": "13.95"
+      }
+     },
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "74.35"
+      }
+     },
+     "lineItems": {
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/996",
+        "sku": "tascamporta1&2/PS",
+        "name": "Generic Power Supply Adapter AU 12V 2A For Tascam Porta One & Two Ministudio",
+        "quantity": 1,
+        "originalTotalSet": {
+         "shopMoney": {
+          "amount": "31.95"
+         }
+        },
+        "discountAllocations": [],
+        "taxLines": [
+         {
+          "priceSet": {
+           "shopMoney": {
+            "amount": "2.9"
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "gid://shopify/LineItem/997",
+        "sku": "G50-UD80m-31826",
+        "name": "Maxell UD2 80 min High Position Type II Blank Audio Cassette Tape - Sealed! NOS",
+        "quantity": 1,
+        "originalTotalSet": {
+         "shopMoney": {
+          "amount": "28.45"
+         }
+        },
+        "discountAllocations": [],
+        "taxLines": [
+         {
+          "priceSet": {
+           "shopMoney": {
+            "amount": "2.59"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "gid://shopify/Order/9907",
+     "name": "#LIVE-7",
+     "createdAt": "2026-10-05T01:27:52Z",
+     "presentmentCurrencyCode": "AUD",
+     "paymentGatewayNames": [
+      "shopify_payments"
+     ],
+     "taxesIncluded": true,
+     "shippingAddress": {
+      "countryCodeV2": "AU"
+     },
+     "totalShippingPriceSet": {
+      "shopMoney": {
+       "amount": "45.95"
+      }
+     },
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "965.0"
+      }
+     },
+     "lineItems": {
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/998",
+        "sku": "240/100_Stepdown",
+        "name": "240V - 100V 50W Isolated Step-Down Transformer Use Japanese Gear In Australia",
+        "quantity": 1,
+        "originalTotalSet": {
+         "shopMoney": {
+          "amount": "65.0"
+         }
+        },
+        "discountAllocations": [],
+        "taxLines": [
+         {
+          "priceSet": {
+           "shopMoney": {
+            "amount": "5.91"
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "gid://shopify/LineItem/999",
+        "sku": "RM-256549-001196-140526",
+        "name": "Korg Wavestation A/D Synthesiser Rack - Vector Synthesis Wave Sequencing - 100V",
+        "quantity": 1,
+        "originalTotalSet": {
+         "shopMoney": {
+          "amount": "854.05"
+         }
+        },
+        "discountAllocations": [],
+        "taxLines": [
+         {
+          "priceSet": {
+           "shopMoney": {
+            "amount": "77.64"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "gid://shopify/Order/9908",
+     "name": "#LIVE-8",
+     "createdAt": "2026-10-05T03:21:06Z",
+     "presentmentCurrencyCode": "AUD",
+     "paymentGatewayNames": [
+      "shopify_payments"
+     ],
+     "taxesIncluded": true,
+     "shippingAddress": {
+      "countryCodeV2": "AU"
+     },
+     "totalShippingPriceSet": {
+      "shopMoney": {
+       "amount": "13.95"
+      }
+     },
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "45.9"
+      }
+     },
+     "lineItems": {
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/9910",
+        "sku": "ADAPT-GEN-02",
+        "name": "12V DC 2A Adapter Replacement For Yamaha PA-1 PA-1B, PA-130 PA-150",
+        "quantity": 1,
+        "originalTotalSet": {
+         "shopMoney": {
+          "amount": "31.95"
+         }
+        },
+        "discountAllocations": [],
+        "taxLines": [
+         {
+          "priceSet": {
+           "shopMoney": {
+            "amount": "2.9"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "gid://shopify/Order/9909",
+     "name": "#LIVE-9",
+     "createdAt": "2026-10-05T07:53:53Z",
+     "presentmentCurrencyCode": "AUD",
+     "paymentGatewayNames": [
+      "shopify_payments"
+     ],
+     "taxesIncluded": true,
+     "shippingAddress": {
+      "countryCodeV2": "AU"
+     },
+     "totalShippingPriceSet": {
+      "shopMoney": {
+       "amount": "29.95"
+      }
+     },
+     "totalPriceSet": {
+      "shopMoney": {
+       "amount": "314.0"
+      }
+     },
+     "lineItems": {
+      "nodes": [
+       {
+        "id": "gid://shopify/LineItem/9911",
+        "sku": "L-060256-11-100926",
+        "name": "Pioneer CDJ-1000MK3 Professional DJ CD MP3 Player Classic CD Turntable Deck",
+        "quantity": 1,
+        "originalTotalSet": {
+         "shopMoney": {
+          "amount": "284.05"
+         }
+        },
+        "discountAllocations": [],
+        "taxLines": [
+         {
+          "priceSet": {
+           "shopMoney": {
+            "amount": "25.82"
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
   }
- ],
- "orders": []
+ ]
 }

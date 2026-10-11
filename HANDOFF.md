@@ -134,6 +134,22 @@ The review queue is now a fact-correction console:
 
 Fetch is limited to 6 payouts per platform per click. `ALLOW_DATA_RESET=true`, local only, shows "Clear all payouts". `npm run demo:unload` removes the demo's made-up facts.
 
+### 4e. Milestone 1 classification and review (Oct 2026)
+
+- **Rules table:** payout classification is one ordered table, `PAYOUT_CLASSIFICATION_RULES`:
+  - R1: order details unavailable
+  - R2: ownership unknown
+  - R3: consignment
+  - R4: owned, destination unknown or referred
+  - R5: owned, overseas
+  - R6: owned, Australia
+
+  The first match wins. Every combination of facts is covered, and the tests pin each row. Fees go through `FEE_CATEGORY_MAP`. Division 66 is shown per line and is "not assessed" unless the source and condition are recorded.
+- **Review queue additions (migration 0006):**
+  - an SKU-less eBay listing can be linked to a stock SKU (`listing_sku_map`, applied on every rebuild)
+  - an unknown destination can be referred for manual review (`order_facts.referred`, which raises a `destination_referred` issue in the accountant group)
+- **Live Shopify validation with orders:** four payouts reconcile, charges equal order totals, and the refund matches its order. See `docs/live-validation-2026-10.md`.
+
 ### 4d. Historical accounting baseline (Oct 2026)
 
 This is how LOFI accounts for marketplace payouts today. The system reproduces it first, and improves on it only after the accountant signs off.
@@ -206,7 +222,7 @@ This phase exists to show the module can reproduce Jess's ledger over several re
 
 ### Shopify (store "LOFI Music", lofi-music.myshopify.com, AUD, `taxesIncluded: true`)
 
-**Live-validated:** three payouts reconcile to $0.00 through a Dev Dashboard app using the client credentials grant. Order details are still blocked until the app gets `read_orders`. See `docs/live-validation-2026-10.md`. The API version is pinned to `2026-10`.
+**Live-validated with order details:** four payouts reconcile to $0.00 through a Dev Dashboard app using the client credentials grant, with `read_orders`. See `docs/live-validation-2026-10.md`. The API version is pinned to `2026-10`.
 
 - All three GraphQL queries in `channels/shopify.ts` were **validated against Shopify's live Admin schema**.
 - Real orders show gateways `shopify_payments` and `Afterpay`, with `sourceName: "web"`. Shopify charges 10% GST on every line and on shipping, including consignment items. That is the core error the system corrects. Example: order #3252, Korg Wavestation, $854.05. Shopify GST is $77.64; at 25% commission under B1 it should be $19.41.

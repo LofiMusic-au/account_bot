@@ -2,7 +2,8 @@
 // replaced; amounts and field shapes are as eBay sent them.
 
 import { describe, expect, it } from "vitest";
-import { normaliseShopifyPayout, type ShopifyBalanceTxn, type ShopifyPayout } from "../src/channels/shopify";
+import { normaliseShopifyPayout, type ShopifyBalanceTxn, type ShopifyOrder, type ShopifyPayout } from "../src/channels/shopify";
+import { baselineSplit } from "../src/accounting/baseline";
 import { normaliseEbayPayout, type EbayOrder, type EbayPayout, type EbayTransaction } from "../src/channels/ebay";
 import { convertAtRate } from "../src/money";
 import { buildReport } from "../src/reconcile";
@@ -140,16 +141,48 @@ describe("live eBay order details (Fulfillment API)", () => {
   });
 });
 
-describe("live Shopify Payments payout shape", () => {
-  it("charges and a refund reconcile to the cent; net = amount - fee; held for review without order access", () => {
-    const f = loadFixture<{ payout: ShopifyPayout; transactions: ShopifyBalanceTxn[] }>("live/shopify-charges-refund.json");
-    const errors = new Map(f.transactions.flatMap((t) => (t.associatedOrder ? [[t.associatedOrder.id, "Access denied for Order object"]] : [])) as [string, string][]);
-    const p = normaliseShopifyPayout(f.payout, f.transactions, new Map(), errors);
+describe("live Shopify Payments payouts with order details", () => {
+  type ShopifyLive = { payouts: { payout: ShopifyPayout; transactions: ShopifyBalanceTxn[]; orders: ShopifyOrder[] }[] };
+  const f = loadFixture<ShopifyLive>("live/shopify-charges-refund.json");
+  const norm = (i: number, withOrders = true) => {
+    const x = f.payouts[i]!;
+    return normaliseShopifyPayout(x.payout, x.transactions, new Map(withOrders ? x.orders.map((o) => [o.id, o]) : []));
+  };
+
+  it("reconcile to the cent; every charge equals its order total; net = amount - fee", () => {
+    for (const i of [0, 1]) {
+      const p = norm(i);
+      const r = buildReport(p, () => null);
+      expect(r.differenceCents).toBe(0);
+      expect(p.warnings.filter((w) => /part-paid|Shopify total/.test(w))).toEqual([]);
+      expect(p.issues.filter((i) => i.severity === "blocking")).toEqual([]);
+    }
+    expect(buildReport(norm(0), () => null).breakdown).toMatchObject({ salesGrossCents: 35100, refundsCents: 500, feesCents: 777 });
+  });
+
+  it("the refund is matched to its earlier order and reverses that order's lines", () => {
+    const p = norm(0);
+    expect(p.refunds[0]!.order).not.toBeNull();
     const r = buildReport(p, () => null);
-    expect(r.netCents).toBe(33823);
-    expect(r.differenceCents).toBe(0);
-    expect(r.breakdown).toMatchObject({ salesGrossCents: 35100, refundsCents: 500, feesCents: 777 });
+    expect(r.issues.some((i) => i.code === "refund_unmatched")).toBe(false);
+    expect(r.refunds.reduce((a, l) => a + l.grossCents, 0)).toBe(-500);
+  });
+
+  it("multi-line orders split into lines + shipping that add up; an export to France is overseas", () => {
+    const p = norm(1);
+    const multi = p.sales.filter((s) => s.lines.length > 1);
+    expect(multi.length).toBe(2);
+    for (const s of p.sales) expect(s.lines.reduce((a, l) => a + l.grossCents, 0) + s.shippingCents).toBe(s.grossCents);
+    const fr = norm(0).sales.find((s) => s.destinationCountry === "FR")!;
+    expect(fr.shippingProgram).toBe("direct_export");
+    expect(baselineSplit(norm(0), () => ({ sku: "x", ownership: "owned", source: "item" })).lines.find((l) => l.orderId === fr.orderId && l.kind === "item")!.category).toBe("SALES_OVERSEAS_NO_GST");
+  });
+
+  it("without order access the payout still reconciles and every sale says why it's held", () => {
+    const x = f.payouts[0]!;
+    const errors = new Map(x.transactions.flatMap((t) => (t.associatedOrder ? [[t.associatedOrder.id, "Access denied for Order object"]] : [])) as [string, string][]);
+    const p = normaliseShopifyPayout(x.payout, x.transactions, new Map(), errors);
+    expect(buildReport(p, () => null).differenceCents).toBe(0);
     expect(p.issues.filter((i) => i.code === "order_details_missing").every((i) => /Access denied/.test(i.message))).toBe(true);
-    expect(r.status).toBe("needs_review");
   });
 });

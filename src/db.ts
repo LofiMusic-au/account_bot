@@ -19,6 +19,7 @@ import type {
   Issue,
   NormalisedPayout,
   Ownership,
+  SaleLine,
   ScenarioCode,
   StockItem,
 } from "./types";
@@ -160,11 +161,12 @@ export async function loadResolver(db: D1Database, payout: NormalisedPayout): Pr
 
 // ------------------------------------------------------------- order facts
 
-/** Apply destinations recorded by staff to orders the platform sent without one. */
-export function applyOrderFacts(payout: NormalisedPayout, facts: Map<string, { destination_country: string | null }>): NormalisedPayout {
+/** Apply destinations recorded (or referred) by staff to orders the platform sent without one. */
+export function applyOrderFacts(payout: NormalisedPayout, facts: Map<string, { destination_country: string | null; referred?: number }>): NormalisedPayout {
   const fix = <T extends { orderId: string; destinationCountry: string | null; shippingProgram: string }>(o: T): T => {
     const f = facts.get(o.orderId);
-    if (!f?.destination_country || o.destinationCountry !== null) return o;
+    if (!f || o.destinationCountry !== null) return o;
+    if (!f.destination_country) return f.referred ? { ...o, destinationReferred: true } : o;
     const dest = f.destination_country.toUpperCase();
     return { ...o, destinationCountry: dest, destinationSource: "staff", shippingProgram: dest === "AU" ? "domestic" : "direct_export" };
   };
@@ -177,13 +179,24 @@ export function applyOrderFacts(payout: NormalisedPayout, facts: Map<string, { d
 
 export async function loadOrderFacts(db: D1Database, payout: NormalisedPayout) {
   const ids = [...new Set([...payout.sales.map((s) => s.orderId), ...payout.refunds.map((r) => r.orderId)])];
-  const rows = await inChunks<{ order_id: string; destination_country: string | null }>(
+  const rows = await inChunks<{ order_id: string; destination_country: string | null; referred: number }>(
     db,
-    (q) => `SELECT order_id, destination_country FROM order_facts WHERE channel = ? AND order_id IN (${q})`,
+    (q) => `SELECT order_id, destination_country, referred FROM order_facts WHERE channel = ? AND order_id IN (${q})`,
     ids,
     [payout.channel],
   );
   return new Map(rows.map((r) => [r.order_id, r]));
+}
+
+/** Staff can't say where an order went: refer it for manual review instead of guessing. */
+export async function referOrderDestination(db: D1Database, channel: Channel, orderId: string): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO order_facts (channel, order_id, destination_country, referred, updated_at) VALUES (?, ?, NULL, 1, datetime('now'))
+       ON CONFLICT (channel, order_id) DO UPDATE SET destination_country = NULL, referred = 1, updated_at = excluded.updated_at`,
+    )
+    .bind(channel, orderId)
+    .run();
 }
 
 export async function setOrderDestination(db: D1Database, channel: Channel, orderId: string, country: string): Promise<void> {
@@ -191,10 +204,58 @@ export async function setOrderDestination(db: D1Database, channel: Channel, orde
   if (!/^[A-Z]{2}$/.test(c)) throw new Error("Destination must be a two-letter country code, e.g. AU or NZ");
   await db
     .prepare(
-      `INSERT INTO order_facts (channel, order_id, destination_country, updated_at) VALUES (?, ?, ?, datetime('now'))
-       ON CONFLICT (channel, order_id) DO UPDATE SET destination_country = excluded.destination_country, updated_at = excluded.updated_at`,
+      `INSERT INTO order_facts (channel, order_id, destination_country, referred, updated_at) VALUES (?, ?, ?, 0, datetime('now'))
+       ON CONFLICT (channel, order_id) DO UPDATE SET destination_country = excluded.destination_country, referred = 0, updated_at = excluded.updated_at`,
     )
     .bind(channel, orderId, c)
+    .run();
+}
+
+// ------------------------------------------------------------- listing map
+
+/** Lines whose listing had no SKU, re-keyed to the stock SKU staff linked them to. */
+export function applyListingMap(payout: NormalisedPayout, map: Map<string, string>): NormalisedPayout {
+  if (map.size === 0) return payout;
+  const fixOrder = <T extends { lines: SaleLine[] }>(o: T): T => ({
+    ...o,
+    lines: o.lines.map((l) => {
+      const sku = l.skuFromListing && l.sku ? map.get(l.sku) : undefined;
+      return sku ? { ...l, sku, skuFromListing: false, listingKey: l.sku! } : l;
+    }),
+  });
+  return {
+    ...payout,
+    sales: payout.sales.map(fixOrder),
+    refunds: payout.refunds.map((r) => (r.order ? { ...r, order: fixOrder(r.order) } : r)),
+  };
+}
+
+export async function loadListingMap(db: D1Database, payout: NormalisedPayout): Promise<Map<string, string>> {
+  const keys = [...payout.sales, ...payout.refunds.flatMap((r) => (r.order ? [r.order] : []))]
+    .flatMap((o) => o.lines)
+    .filter((l) => l.skuFromListing && l.sku)
+    .map((l) => l.sku!);
+  if (!keys.length) return new Map();
+  const rows = await inChunks<{ listing_key: string; sku: string }>(
+    db,
+    (q) => `SELECT listing_key, sku FROM listing_sku_map WHERE channel = ? AND listing_key IN (${q})`,
+    [...new Set(keys)],
+    [payout.channel],
+  );
+  return new Map(rows.map((r) => [r.listing_key, r.sku]));
+}
+
+/** Link a SKU-less listing to a real stock SKU. Persists across re-imports. */
+export async function linkListing(db: D1Database, channel: Channel, listingKey: string, sku: string): Promise<void> {
+  const s = sku.trim();
+  if (!s) throw new Error("Enter the stock SKU this listing is");
+  if (s.toUpperCase() === listingKey.toUpperCase()) throw new Error("That's the listing itself; enter the stock SKU");
+  await db
+    .prepare(
+      `INSERT INTO listing_sku_map (channel, listing_key, sku, updated_at) VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT (channel, listing_key) DO UPDATE SET sku = excluded.sku, updated_at = excluded.updated_at`,
+    )
+    .bind(channel, listingKey, s)
     .run();
 }
 

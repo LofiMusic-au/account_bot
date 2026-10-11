@@ -40,7 +40,8 @@ Staff fix blocking issues by recording **facts**, never tax codes. The review qu
   - An existing rule is never overwritten without ticking "replace".
   - Rules never set purchase prices.
   - An item's own record always wins over a rule.
-- **No SKU on eBay:** the line is keyed on its listing ID (`EBAY-ITEM-<id>`), so it can be recorded like any SKU.
+- **No SKU on eBay:** the line is keyed on its listing ID (`EBAY-ITEM-<id>`). Staff can either **link the listing to a known stock SKU**, which persists across re-imports, or record its facts directly.
+- **Destination unknown:** answer Australia, overseas (with a country), or **"Not sure: refer for review"**, which moves it to the accountant group. Nothing is assumed from a missing address.
 - **Ready feedback:** rows that are the only blocker for a payout say so ("Fixing this makes 1 payout ready"). After each save, the message lists which payouts became ready.
 - **Other one-click answers:** destination, consignor Australian GST registration, and agency or 153-B.
 
@@ -67,7 +68,7 @@ This is how LOFI accounts for marketplace payouts today. The system reproduces i
 - a BAS column for GST
 
 **What the system does:**
-- **Stage 1:** `src/accounting/baseline.ts` gives every payout line a logical category from ownership and destination only. Missing facts give `UNCLASSIFIED`, never a guess. The split always adds up to the payout.
+- **Stage 1:** `src/accounting/baseline.ts` gives every payout line a logical category using **one ordered rules table** (`PAYOUT_CLASSIFICATION_RULES`, R1–R6, shown on the Rules page). The table looks at ownership and destination only. Fees map through the configured `FEE_CATEGORY_MAP`. Each line records the rule that decided it, and its Division 66 status ("not assessed" unless acquisition facts exist). Missing facts give `UNCLASSIFIED`, never a guess. The split always adds up to the payout.
 - **Stage 2 (shadow only):** `src/accounting/consignment.ts` builds a shadow copy of Jess's ledger from the same sales, so nothing is re-keyed. It uses the `consignment_entries` table and the Consignments page:
   - **Sale:** the item price after discounts, plus the shipping the buyer paid (each rule can switch this off).
   - **Fees:** marketplace and payment fees come in automatically.
