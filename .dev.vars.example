@@ -1,0 +1,16 @@
+# Copy to .dev.vars (git-ignored) and fill in. Used by `npm run dev` (Wrangler)
+# and by `npm run live:validate`. Production secrets go in with
+# `npx wrangler secret put <NAME>` instead; never commit real values.
+
+# Shopify custom app (Admin API): read_orders, read_shopify_payments
+SHOPIFY_ADMIN_TOKEN=
+
+# eBay developer app + user refresh token: sell.finances, sell.fulfillment.readonly
+EBAY_CLIENT_ID=
+EBAY_CLIENT_SECRET=
+EBAY_REFRESH_TOKEN=
+# Optional instead of the three above, for one-off validation runs only:
+# EBAY_ACCESS_TOKEN=
+
+# Optional: protects the local dashboard
+# DASHBOARD_TOKEN=

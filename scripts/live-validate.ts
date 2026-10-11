@@ -8,11 +8,11 @@
 //   npx vite-node scripts/live-validate.ts ebay <payoutId> --fixture <name>
 //   npx vite-node scripts/live-validate.ts shopify [...]          # same for Shopify Payments
 //
-// Credentials come from the environment, never from files in this repo:
+// Credentials come from the shell or from .dev.vars (git-ignored), never from tracked files:
 //   eBay:    EBAY_ACCESS_TOKEN, or EBAY_CLIENT_ID + EBAY_CLIENT_SECRET + EBAY_REFRESH_TOKEN
 //   Shopify: SHOPIFY_SHOP + SHOPIFY_ADMIN_TOKEN (+ SHOPIFY_API_VERSION, default 2026-10)
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EbayClient, ebayOrderForAudit, normaliseEbayPayout, type EbayOrder, type EbayPayout, type EbayTransaction } from "../src/channels/ebay";
 import { normaliseShopifyPayout, ShopifyClient, type ShopifyBalanceTxn, type ShopifyOrder, type ShopifyPayout } from "../src/channels/shopify";
@@ -25,7 +25,22 @@ import { makeTestD1 } from "../test/helpers";
 const [channel, arg, ...rest] = process.argv.slice(2);
 const fixtureName = rest[0] === "--fixture" ? rest[1] : undefined;
 const root = join(import.meta.dirname, "..");
-const env = process.env;
+// Values come from the shell first, then .dev.vars (git-ignored, the same file
+// `wrangler dev` reads), then wrangler.toml's plain vars for the shop/version.
+const env: Record<string, string | undefined> = { ...readVars(join(root, ".dev.vars")), ...process.env };
+env.SHOPIFY_SHOP ??= /SHOPIFY_SHOP\s*=\s*"([^"]+)"/.exec(readFileSync(join(root, "wrangler.toml"), "utf8"))?.[1];
+env.SHOPIFY_API_VERSION ??= /SHOPIFY_API_VERSION\s*=\s*"([^"]+)"/.exec(readFileSync(join(root, "wrangler.toml"), "utf8"))?.[1];
+for (const k of Object.keys(env)) if (env[k] === "") delete env[k];
+
+function readVars(path: string): Record<string, string> {
+  if (!existsSync(path)) return {};
+  const out: Record<string, string> = {};
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
+    if (m) out[m[1]!] = m[2]!.replace(/^(["'])(.*)\1$/, "$2");
+  }
+  return out;
+}
 
 const md = (rows: (string | number)[][]) =>
   rows.map((r, i) => `| ${r.join(" | ")} |${i === 0 ? `\n|${r.map(() => "---").join("|")}|` : ""}`).join("\n");
