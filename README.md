@@ -102,6 +102,21 @@ This phase exists to show the module can reproduce Jess's ledger over several re
 
 **Ownership convention:** SKUs beginning `L-` are LOFI-owned. That sets ownership only. The acquisition source, condition and price must still be recorded before a GST scenario (A1/A2/A3) is derived. `LC-` and other L-letter prefixes aren't covered until their meaning is confirmed.
 
+## QuickBooks posting (Milestone 2, dry run)
+
+Each payout gets **one journal**, dated on the payout date, through the channel clearing account. A **transfer from clearing to the bank** follows, and it's what the bank feed matches. The payout page shows the exact preview, the gate, approval and posting.
+
+**It runs in dry-run mode by default.** Nothing is written to QuickBooks unless `QBO_MODE` is sandbox or live, all credentials are set, and a person approves and posts. See `docs/milestone2-posting.md` for the gate, idempotency, adjustments, audit trail and account mapping.
+
+**Locked rules:**
+- Fees: eBay and PayPal are GST free purchases. Shopify, Afterpay and ZIP are GST on purchases.
+- FX: the marketplace's own conversion is used as recorded.
+- Discounts: order-level discounts are split evenly across items.
+- Local pickup is domestic.
+- eBay International Shipping is overseas, no GST.
+- A GST-registered consignor goes to manual review.
+- Division 66 and trade-ins are deferred.
+
 ## Setup
 
 ```bash

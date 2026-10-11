@@ -88,6 +88,8 @@ export interface PayoutReport {
   sourceTransactionCount: number;
   /** Stage 1 of LOFI's historical method: the payout split by logical category. */
   baseline?: BaselineSplit;
+  /** Foreign-currency sales with the marketplace's own conversion (FX rule), for the audit trail. */
+  fx?: { orderId: string; currency: string; foreignAmount: string; rate: string | null; audCents: number; source: string }[];
   generatedAt: string;
 }
 
@@ -259,6 +261,7 @@ export function buildReport(payout: NormalisedPayout, resolve: StockResolver, no
     warnings,
     sourceTransactionCount: payout.raw.transactions.length,
     baseline: baselineSplit(payout, resolve),
+    fx: payout.sales.filter((o) => o.fx).map((o) => ({ orderId: o.orderId, ...o.fx! })),
     generatedAt: now.toISOString(),
   };
 }

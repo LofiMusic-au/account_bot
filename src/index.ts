@@ -47,9 +47,13 @@ import {
 import { toCents } from "./money";
 import { consignmentEntries, type BasTreatment, type PartyRole } from "./accounting/consignment";
 import { splitCsv } from "./accounting/baseline";
+import { DryRunGateway, type QboGateway } from "./posting/gateway";
+import { QboHttpGateway } from "./posting/qbo-http";
+import { approveAdjustment, approvePosting, getPosting, listEvents, pendingAdjustment, postAdjustment, postPayout, refreshPosting } from "./posting/workflow";
+import { ACCOUNT_DEFS, TAX_CODES, type AccountKey, type TaxCodeName } from "./posting/accounts";
 import { buildReport, type PayoutReport } from "./reconcile";
 import type { Channel, Issue, NormalisedPayout } from "./types";
-import { renderConsignments, renderRules, renderIndex, renderReport, renderReview, renderStockForm, type ConsignorOption, type ReviewItem } from "./ui";
+import { renderConsignments, renderQboSettings, renderRules, renderIndex, renderReport, renderReview, renderStockForm, type ConsignorOption, type ReviewItem } from "./ui";
 
 export interface Env {
   DB: D1Database;
@@ -66,6 +70,39 @@ export interface Env {
   DASHBOARD_TOKEN?: string;
   /** "true" shows the "Clear all payouts" button. For local/testing only. */
   ALLOW_DATA_RESET?: string;
+  /** QuickBooks posting: "dry_run" (default, never writes) | "sandbox" | "live". */
+  QBO_MODE?: string;
+  QBO_REALM_ID?: string;
+  QBO_CLIENT_ID?: string;
+  QBO_CLIENT_SECRET?: string;
+  /** Initial refresh token; Intuit rotates it and the latest is kept in D1. */
+  QBO_REFRESH_TOKEN?: string;
+}
+
+/**
+ * The QuickBooks gateway for this environment. Dry-run unless QBO_MODE is
+ * explicitly sandbox or live AND every credential is present.
+ */
+export function gatewayFor(env: Env): QboGateway {
+  const mode = env.QBO_MODE === "sandbox" || env.QBO_MODE === "live" ? env.QBO_MODE : "dry_run";
+  if (mode === "dry_run" || !env.QBO_REALM_ID || !env.QBO_CLIENT_ID || !env.QBO_CLIENT_SECRET || !env.QBO_REFRESH_TOKEN) return new DryRunGateway();
+  return new QboHttpGateway({
+    mode,
+    realmId: env.QBO_REALM_ID,
+    clientId: env.QBO_CLIENT_ID,
+    clientSecret: env.QBO_CLIENT_SECRET,
+    tokens: {
+      get: async () =>
+        (await env.DB.prepare("SELECT refresh_token FROM qbo_tokens WHERE id = 1").first<{ refresh_token: string }>())?.refresh_token ?? env.QBO_REFRESH_TOKEN!,
+      set: async (t) => {
+        await env.DB.prepare(
+          "INSERT INTO qbo_tokens (id, refresh_token, updated_at) VALUES (1, ?, datetime('now')) ON CONFLICT (id) DO UPDATE SET refresh_token = excluded.refresh_token, updated_at = excluded.updated_at",
+        )
+          .bind(t)
+          .run();
+      },
+    },
+  });
 }
 
 /** Max payouts processed per platform per run, to stay inside Worker subrequest limits. */
@@ -113,6 +150,8 @@ export async function rebuild(db: D1Database, payout: NormalisedPayout, extraIss
   const resolve = await loadResolver(db, p);
   const report = buildReport(p, resolve);
   await saveReport(db, report);
+  // Milestone 2: keep the QuickBooks preview, gate and status current (never posts).
+  await refreshPosting(db, report);
   // Stage 2 (shadow): the same sales feed the consignment ledger.
   const ctx = { rules: await loadRules(db), costs: await loadCosts(db, p.channel, [...p.sales, ...p.refunds].map((x) => x.orderId)) };
   await syncConsignmentLedger(db, p.channel, p.payoutId, consignmentEntries(p, resolve, ctx));
@@ -264,6 +303,31 @@ export default {
 
     if (req.method === "GET" && path === "/rules") return renderRules();
 
+    if (req.method === "GET" && path === "/qbo") {
+      const a = (await env.DB.prepare("SELECT account_key, qbo_account_id FROM qbo_account_map").all<{ account_key: string; qbo_account_id: string }>()).results;
+      const t = (await env.DB.prepare("SELECT tax_code_name, qbo_tax_code_id FROM qbo_tax_code_map").all<{ tax_code_name: string; qbo_tax_code_id: string }>()).results;
+      return renderQboSettings(gatewayFor(env).mode, new Map(a.map((x) => [x.account_key, x.qbo_account_id])), new Map(t.map((x) => [x.tax_code_name, x.qbo_tax_code_id])), msg);
+    }
+
+    // QuickBooks IDs for logical accounts / tax codes: {"accounts": {"SALES_DOMESTIC_GST": "123"}, "taxCodes": {"GST (10% Sales)": "10"}}
+    if (req.method === "POST" && path === "/api/qbo/map") {
+      const body = (await req.json()) as { accounts?: Record<string, string>; taxCodes?: Record<string, string> };
+      const errors: string[] = [];
+      for (const k of Object.keys(body.accounts ?? {})) if (!(k in ACCOUNT_DEFS)) errors.push(`unknown account key ${k}`);
+      for (const k of Object.keys(body.taxCodes ?? {})) if (!TAX_CODES.includes(k as TaxCodeName)) errors.push(`unknown tax code ${k}`);
+      if (errors.length) return Response.json({ ok: false, errors }, { status: 400 });
+      const stmts = [
+        ...Object.entries(body.accounts ?? {}).map(([k, v]) =>
+          env.DB.prepare("INSERT INTO qbo_account_map (account_key, qbo_account_id) VALUES (?, ?) ON CONFLICT (account_key) DO UPDATE SET qbo_account_id = excluded.qbo_account_id, updated_at = datetime('now')").bind(k as AccountKey, String(v)),
+        ),
+        ...Object.entries(body.taxCodes ?? {}).map(([k, v]) =>
+          env.DB.prepare("INSERT INTO qbo_tax_code_map (tax_code_name, qbo_tax_code_id) VALUES (?, ?) ON CONFLICT (tax_code_name) DO UPDATE SET qbo_tax_code_id = excluded.qbo_tax_code_id, updated_at = datetime('now')").bind(k, String(v)),
+        ),
+      ];
+      if (stmts.length) await env.DB.batch(stmts);
+      return Response.json({ ok: true, saved: stmts.length });
+    }
+
     if (req.method === "GET" && path === "/consignments") {
       const qp = url.searchParams.get("period");
       const period = qp && /^\d{4}-\d{2}$/.test(qp) ? qp : undefined;
@@ -345,7 +409,7 @@ export default {
       return redirect(withMsg("/", log.join(" · ")));
     }
 
-    const m = /^\/payout\/(ebay|shopify)\/([^/]+)(?:\/(rerun|refetch|rebuild|split\.csv))?$/.exec(path);
+    const m = /^\/payout\/(ebay|shopify)\/([^/]+)(?:\/(rerun|refetch|rebuild|split\.csv|approve|post|adjustment-approve|adjustment-post))?$/.exec(path);
     if (m) {
       const [, channel, rawId, action] = m;
       const payoutId = decodeURIComponent(rawId!);
@@ -357,6 +421,30 @@ export default {
       if (req.method === "POST" && (action === "rerun" || action === "refetch")) {
         const log = await run(env, { channel: channel!, payoutId });
         return redirect(withMsg(back, log.join(" · ")));
+      }
+      if (req.method === "POST" && (action === "approve" || action === "post" || action === "adjustment-approve" || action === "adjustment-post")) {
+        const by = req.headers.get("Cf-Access-Authenticated-User-Email") ?? "dashboard user";
+        try {
+          if (action === "approve") {
+            await approvePosting(env.DB, channel!, payoutId, by);
+            return redirect(withMsg(back, "Approved. It will be posted only when you press Post (and posting is switched on)."));
+          }
+          if (action === "adjustment-approve") {
+            await approveAdjustment(env.DB, channel!, payoutId, by);
+            return redirect(withMsg(back, "Adjustment approved"));
+          }
+          const gw = gatewayFor(env);
+          if (action === "adjustment-post") {
+            await postAdjustment(env.DB, gw, channel!, payoutId);
+            return redirect(withMsg(back, "Adjustment posted"));
+          }
+          const r = await getReport(env.DB, channel!, payoutId);
+          if (!r) throw new Error("Payout not found");
+          const after = await postPayout(env.DB, gw, r);
+          return redirect(withMsg(back, after.status === "posted" ? `Posted to QuickBooks (${gw.mode}): journal ${after.journal_id}, transfer ${after.transfer_id}` : `Not finished: ${after.last_error ?? after.status}`));
+        } catch (e) {
+          return redirect(withMsg(back, `Not done: ${(e as Error).message}`));
+        }
       }
       if (req.method === "GET" && action === "split.csv") {
         const r = await getReport(env.DB, channel!, payoutId);
@@ -372,7 +460,13 @@ export default {
       const r = await getReport(env.DB, channel!, payoutId);
       if (!r) return new Response("Payout not found", { status: 404 });
       const consignors = new Map((await consignorList(env)).map((c) => [c.id, c.name]));
-      return renderReport(r, await sourceInfo(env.DB, channel!, payoutId), msg, consignors);
+      const posting = {
+        row: await getPosting(env.DB, channel!, payoutId),
+        events: await listEvents(env.DB, channel!, payoutId, 20),
+        adjustment: await pendingAdjustment(env.DB, channel!, payoutId),
+        mode: gatewayFor(env).mode,
+      };
+      return renderReport(r, await sourceInfo(env.DB, channel!, payoutId), msg, consignors, posting);
     }
 
     if (req.method === "GET" && path === "/review") {

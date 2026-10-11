@@ -647,15 +647,17 @@ export interface ReportSummary {
   blocking_count: number;
   signoff_count: number;
   scenario_summary: string | null;
+  posting_status?: string | null;
 }
 
 export async function listReports(db: D1Database, limit = 60, channel?: Channel): Promise<ReportSummary[]> {
   return (
     await db
       .prepare(
-        `SELECT channel, payout_id, payout_date, net_cents, expected_cents, difference_cents, status, sale_count, review_count,
-           gst_cents, provisional, blocking_count, signoff_count, scenario_summary
-         FROM payout_reports ${channel ? "WHERE channel = ?" : ""} ORDER BY payout_date DESC, channel LIMIT ?`,
+        `SELECT r.channel, r.payout_id, r.payout_date, r.net_cents, r.expected_cents, r.difference_cents, r.status, r.sale_count, r.review_count,
+           r.gst_cents, r.provisional, r.blocking_count, r.signoff_count, r.scenario_summary, q.status AS posting_status
+         FROM payout_reports r LEFT JOIN qbo_postings q ON q.channel = r.channel AND q.payout_id = r.payout_id
+         ${channel ? "WHERE r.channel = ?" : ""} ORDER BY r.payout_date DESC, r.channel LIMIT ?`,
       )
       .bind(...(channel ? [channel, limit] : [limit]))
       .all<ReportSummary>()
@@ -688,6 +690,8 @@ export async function clearPayouts(db: D1Database): Promise<number> {
   const n = (await db.prepare("SELECT count(*) AS n FROM payout_reports").first<{ n: number }>())?.n ?? 0;
   await db.batch([
     db.prepare("DELETE FROM consignment_entries"),
+    // Unposted QuickBooks previews go; anything posted (and its history) is kept.
+    db.prepare("DELETE FROM qbo_postings WHERE journal_id IS NULL AND transfer_id IS NULL"),
     db.prepare("DELETE FROM payout_reports"),
     db.prepare("DELETE FROM source_transactions"),
     db.prepare("DELETE FROM source_orders"),

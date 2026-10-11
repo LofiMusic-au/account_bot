@@ -32,6 +32,14 @@ Rules for this baseline:
 - **The `L-` SKU convention sets ownership only, never the GST scenario.**
 - **The review queue asks for facts, not journal decisions.**
 
+## QuickBooks posting (Milestone 2)
+
+- **All QuickBooks access goes through `src/posting/gateway.ts`.** Only `qbo-http.ts` talks to Intuit. The default is `DryRunGateway`, which refuses every call. Never make a live QuickBooks write without the user's explicit instruction.
+- **The hard gate** is in `gateReasons`. Never weaken it to get a payout posted.
+- **One payout gives one journal and one transfer.** Always look up before creating.
+- **Posted history is immutable.** Changes become linked adjusting journals.
+- **No QuickBooks IDs in business logic.** Logical keys only (`src/posting/accounts.ts`). IDs live in `qbo_account_map` and `qbo_tax_code_map`.
+
 ## Commands
 
 - `npm test`: vitest. Keep every scenario covered when changing rules.

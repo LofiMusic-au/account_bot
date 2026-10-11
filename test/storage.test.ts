@@ -120,16 +120,30 @@ describe("staff correct facts, not tax codes", () => {
   });
 });
 
-describe("milestone 1 can't write to QuickBooks", () => {
-  it("has no QuickBooks client and only calls eBay and Shopify", () => {
+describe("QuickBooks writes are contained and off by default", () => {
+  it("only the HTTP gateway mentions QuickBooks hosts, and eBay/Shopify are the only other hosts", () => {
     const files = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((e: import("node:fs").Dirent) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]));
-    const src = files(join(import.meta.dirname, "../src")).map((f) => readFileSync(f, "utf8")).join("\n");
-    expect(src).not.toMatch(/intuit\.com|quickbooks\.api|oauth\.platform\.intuit/i);
-    const hosts = [...src.matchAll(/https:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]!.toLowerCase());
-    expect(new Set(hosts.filter((h) => !h.endsWith("ebay.com")))).toEqual(new Set());
+    const all = files(join(import.meta.dirname, "../src"));
+    for (const f of all) {
+      const src = readFileSync(f, "utf8");
+      if (f.endsWith("posting/qbo-http.ts")) continue;
+      expect(src, f).not.toMatch(/intuit\.com|quickbooks\.api/i);
+    }
+    const hosts = all.flatMap((f) => [...readFileSync(f, "utf8").matchAll(/https:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]!.toLowerCase()));
+    expect(new Set(hosts.filter((h) => !h.endsWith("ebay.com") && !h.endsWith("intuit.com")))).toEqual(new Set());
+  });
+
+  it("the gateway is dry-run unless QBO_MODE and every credential are set", async () => {
+    const { gatewayFor } = await import("../src/index");
+    const base = { DB: {} as D1Database } as never;
+    expect(gatewayFor(base).mode).toBe("dry_run");
+    expect(gatewayFor({ ...(base as object), QBO_MODE: "live" } as never).mode).toBe("dry_run"); // no credentials
+    expect(gatewayFor({ ...(base as object), QBO_MODE: "banana", QBO_REALM_ID: "1", QBO_CLIENT_ID: "a", QBO_CLIENT_SECRET: "b", QBO_REFRESH_TOKEN: "c" } as never).mode).toBe("dry_run");
+    expect(gatewayFor({ ...(base as object), QBO_MODE: "sandbox", QBO_REALM_ID: "1", QBO_CLIENT_ID: "a", QBO_CLIENT_SECRET: "b", QBO_REFRESH_TOKEN: "c" } as never).mode).toBe("sandbox");
   });
 });
+
 
 describe("consignor facts", () => {
   it("migration 0003 keeps GST answers, resets agreement types to unknown and keeps stock links", () => {

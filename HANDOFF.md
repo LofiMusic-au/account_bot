@@ -134,6 +134,31 @@ The review queue is now a fact-correction console:
 
 Fetch is limited to 6 payouts per platform per click. `ALLOW_DATA_RESET=true`, local only, shows "Clear all payouts". `npm run demo:unload` removes the demo's made-up facts.
 
+### 4f. Milestone 2: QuickBooks posting, dry run (Oct 2026)
+
+Built and tested against a fake QuickBooks. It's dry-run by default, and no QuickBooks write has ever been made. See `docs/milestone2-posting.md`.
+
+**Posting:**
+- one journal per payout plus a clearing-to-bank transfer
+- the hard gate, a fingerprinted approval, and an idempotent post (looks up before creating, resumes a partial post)
+- immutable posted history with linked adjusting journals
+- an audit event log
+- migration 0007
+
+**Locked rules applied:**
+- fee GST table
+- marketplace FX
+- even discount split
+- local pickup is domestic (Shopify needs a fulfillment-orders scope)
+- eBay International Shipping GST-free
+- registered consignor goes to manual review
+- Division 66 and trade-ins deferred (they don't block)
+
+**Next:**
+- confirm or create the fee, adjustment, clearing and bank accounts
+- verify the QuickBooks request format in a sandbox
+- run the historical comparison
+
 ### 4e. Milestone 1 classification and review (Oct 2026)
 
 - **Rules table:** payout classification is one ordered table, `PAYOUT_CLASSIFICATION_RULES`:
@@ -216,7 +241,7 @@ This phase exists to show the module can reproduce Jess's ledger over several re
 - **Fees on a multi-item order:** shared across its lines in proportion to the amounts. Shipping labels count as postage, not fees.
 - **Refunds:** reverse the split, including fixed amounts. Manual costs aren't applied to refund rows.
 - **Shipping on a mixed order:** shared across its item categories in proportion. The historical method didn't split shipping.
-- **eBay International Shipping:** split as overseas, no GST (rule R5). LOFI confirmed this is the historical treatment on 11 Oct 2026. The draft GST scenario C2 still awaits the accountant.
+- **eBay International Shipping:** overseas, no GST (rule R6). Confirmed as LOFI's rule, and C2 is resolved as GST-free.
 - **Consignor active dates and rule versions:** stored only. Rules aren't versioned over time yet. An item can override its consignor's rule (`stock_items.settlement_rule_id`), but there's no UI for that yet.
 - **`LC-`:** whether it means LOFI-owned is unknown, so only `L-` is treated as owned.
 

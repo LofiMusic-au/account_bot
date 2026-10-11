@@ -4,7 +4,8 @@
 //   LOFI-owned, Australia      -> SALES_DOMESTIC_GST
 //   LOFI-owned, LOFI exports   -> SALES_OVERSEAS_NO_GST
 //   LOFI-owned, eBay Intl Ship -> SALES_OVERSEAS_NO_GST (confirmed historical treatment)
-//   Consignment (anywhere)     -> CONSIGNMENT_SALES_NO_GST  (+ consignment ledger)
+//   Consignment (anywhere)     -> CONSIGNMENT_SALES_NO_GST ("Commission Sales"), unless the
+//                                consignor is GST-registered or unknown (manual review)
 //   eBay / Shopify fees        -> EBAY_FEES / SHOPIFY_FEES
 //   Adjustments                -> MARKETPLACE_ADJUSTMENTS
 //   Refunds                    -> REFUND, reversing the original category
@@ -52,6 +53,8 @@ export interface BaselineSplit {
 export interface LineFacts {
   orderDetailsMissing: boolean;
   ownership: "owned" | "consignment" | null;
+  /** For consignment: the consignor's Australian GST registration. "none" = no consignor recorded. */
+  consignorGst: "registered" | "not_registered" | "unknown" | "none";
   /** "referred" = staff sent the destination question to manual review. */
   destination: "AU" | "overseas" | "unknown" | "referred";
   ebayInternationalShipping: boolean;
@@ -72,20 +75,26 @@ export interface ClassificationRule {
 export const PAYOUT_CLASSIFICATION_RULES: readonly ClassificationRule[] = [
   { id: "R1", when: "Order details unavailable", test: (f) => f.orderDetailsMissing, category: "UNCLASSIFIED" },
   { id: "R2", when: "Ownership unknown (no stock record, no prefix rule, not L-)", test: (f) => f.ownership === null, category: "UNCLASSIFIED" },
-  { id: "R3", when: "Consignment, any destination", test: (f) => f.ownership === "consignment", category: "CONSIGNMENT_SALES_NO_GST" },
-  { id: "R4", when: "LOFI-owned, destination unknown or referred for review", test: (f) => f.destination === "unknown" || f.destination === "referred", category: "UNCLASSIFIED" },
+  {
+    id: "R3",
+    when: "Consignment where the consignor is GST-registered, or their registration or the consignor isn't recorded (manual review)",
+    test: (f) => f.ownership === "consignment" && f.consignorGst !== "not_registered",
+    category: "UNCLASSIFIED",
+  },
+  { id: "R4", when: "Consignment, consignor not GST-registered, any destination", test: (f) => f.ownership === "consignment", category: "CONSIGNMENT_SALES_NO_GST" },
+  { id: "R5", when: "LOFI-owned, destination unknown or referred for review", test: (f) => f.destination === "unknown" || f.destination === "referred", category: "UNCLASSIFIED" },
   {
     // Confirmed by LOFI (11 Oct 2026): staff have always split eBay
     // International Shipping sales as overseas, no GST. Kept as its own row so
     // these sales stay traceable; the draft GST scenario C2 still awaits the
     // accountant, independently of this baseline.
-    id: "R5",
+    id: "R6",
     when: "LOFI-owned, sold through eBay International Shipping (overseas, no GST: LOFI's confirmed historical treatment)",
     test: (f) => f.ebayInternationalShipping,
     category: "SALES_OVERSEAS_NO_GST",
   },
-  { id: "R6", when: "LOFI-owned, LOFI ships it overseas itself", test: (f) => f.destination === "overseas", category: "SALES_OVERSEAS_NO_GST" },
-  { id: "R7", when: "LOFI-owned, sold in Australia", test: (f) => f.destination === "AU", category: "SALES_DOMESTIC_GST" },
+  { id: "R7", when: "LOFI-owned, LOFI ships it overseas itself", test: (f) => f.destination === "overseas", category: "SALES_OVERSEAS_NO_GST" },
+  { id: "R8", when: "LOFI-owned, sold in Australia (including local pickup)", test: (f) => f.destination === "AU", category: "SALES_DOMESTIC_GST" },
 ];
 
 /** Fee categories by channel. Configured, not inferred. */
@@ -99,6 +108,13 @@ export function lineFacts(order: OrderSale, line: SaleLine, item: StockItem | nu
   return {
     orderDetailsMissing: !!line.placeholder,
     ownership: item?.ownership ?? null,
+    consignorGst: !item?.consignor
+      ? "none"
+      : item.consignor.australianGstRegistered === null
+        ? "unknown"
+        : item.consignor.australianGstRegistered
+          ? "registered"
+          : "not_registered",
     destination: order.destinationReferred
       ? "referred"
       : dest === null || order.shippingProgram === "unknown"

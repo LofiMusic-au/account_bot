@@ -23,7 +23,8 @@ const order = (over: Partial<OrderSale> = {}): OrderSale => ({
   ...over,
 });
 const owned: StockItem = { sku: "S", ownership: "owned", source: "item" };
-const consigned: StockItem = { sku: "S", ownership: "consignment", source: "item" };
+const consignorRow = { id: 1, name: "C", country: "JP", australianGstRegistered: false, australianGstBasis: "recorded" as const, commissionType: "percent" as const, commissionValue: 25, agreementType: null };
+const consigned: StockItem = { sku: "S", ownership: "consignment", source: "item", consignor: consignorRow };
 const cat = (o: OrderSale, item: StockItem | null) => itemCategory(o, o.lines[0]!, () => item);
 
 describe("the payout classification rules table", () => {
@@ -31,11 +32,12 @@ describe("the payout classification rules table", () => {
     expect(PAYOUT_CLASSIFICATION_RULES.map((r) => [r.id, r.category])).toEqual([
       ["R1", "UNCLASSIFIED"],
       ["R2", "UNCLASSIFIED"],
-      ["R3", "CONSIGNMENT_SALES_NO_GST"],
-      ["R4", "UNCLASSIFIED"],
-      ["R5", "SALES_OVERSEAS_NO_GST"],
+      ["R3", "UNCLASSIFIED"],
+      ["R4", "CONSIGNMENT_SALES_NO_GST"],
+      ["R5", "UNCLASSIFIED"],
       ["R6", "SALES_OVERSEAS_NO_GST"],
-      ["R7", "SALES_DOMESTIC_GST"],
+      ["R7", "SALES_OVERSEAS_NO_GST"],
+      ["R8", "SALES_DOMESTIC_GST"],
     ]);
   });
 
@@ -43,15 +45,18 @@ describe("the payout classification rules table", () => {
     const placeholder = order({ lines: [{ lineId: "l", sku: null, title: "t", quantity: 1, grossCents: 1000, discountCents: 0, placeholder: true }] });
     expect(cat(placeholder, owned).ruleId).toBe("R1");
     expect(cat(order(), null).ruleId).toBe("R2");
-    expect(cat(order({ destinationCountry: "US", shippingProgram: "direct_export" }), consigned).ruleId).toBe("R3"); // consignment beats overseas
-    expect(cat(order({ destinationCountry: null, shippingProgram: "unknown" }), consigned).ruleId).toBe("R3");
-    expect(cat(order({ destinationCountry: null, shippingProgram: "unknown" }), owned).ruleId).toBe("R4");
-    expect(cat(order({ destinationCountry: null, shippingProgram: "unknown", destinationReferred: true }), owned).ruleId).toBe("R4");
-    expect(cat(order({ destinationCountry: "NZ", shippingProgram: "direct_export" }), owned)).toMatchObject({ ruleId: "R6", category: "SALES_OVERSEAS_NO_GST" });
-    // eBay International Shipping has its own row (confirmed historical treatment), not the direct-export row.
-    expect(cat(order({ destinationCountry: "DE", shippingProgram: "ebay_international" }), owned)).toMatchObject({ ruleId: "R5", category: "SALES_OVERSEAS_NO_GST" });
-    expect(cat(order({ destinationCountry: "DE", shippingProgram: "ebay_international" }), consigned).ruleId).toBe("R3");
-    expect(cat(order(), owned)).toMatchObject({ ruleId: "R7", category: "SALES_DOMESTIC_GST" });
+    expect(cat(order(), { ...consigned, consignor: { ...consignorRow, australianGstRegistered: true } }).ruleId).toBe("R3"); // registered: manual review
+    expect(cat(order(), { ...consigned, consignor: { ...consignorRow, australianGstRegistered: null } }).ruleId).toBe("R3");
+    expect(cat(order(), { ...consigned, consignor: null }).ruleId).toBe("R3");
+    expect(cat(order({ destinationCountry: "US", shippingProgram: "direct_export" }), consigned).ruleId).toBe("R4"); // consignment beats overseas
+    expect(cat(order({ destinationCountry: null, shippingProgram: "unknown" }), consigned).ruleId).toBe("R4");
+    expect(cat(order({ destinationCountry: null, shippingProgram: "unknown" }), owned).ruleId).toBe("R5");
+    expect(cat(order({ destinationCountry: null, shippingProgram: "unknown", destinationReferred: true }), owned).ruleId).toBe("R5");
+    expect(cat(order({ destinationCountry: "NZ", shippingProgram: "direct_export" }), owned)).toMatchObject({ ruleId: "R7", category: "SALES_OVERSEAS_NO_GST" });
+    // eBay International Shipping has its own row (confirmed treatment), not the direct-export row.
+    expect(cat(order({ destinationCountry: "DE", shippingProgram: "ebay_international" }), owned)).toMatchObject({ ruleId: "R6", category: "SALES_OVERSEAS_NO_GST" });
+    expect(cat(order({ destinationCountry: "DE", shippingProgram: "ebay_international" }), consigned).ruleId).toBe("R4");
+    expect(cat(order(), owned)).toMatchObject({ ruleId: "R8", category: "SALES_DOMESTIC_GST" });
   });
 
   it("every combination of facts matches some row", () => {
@@ -59,7 +64,8 @@ describe("the payout classification rules table", () => {
       for (const ownership of ["owned", "consignment", null] as const)
         for (const destination of ["AU", "overseas", "unknown", "referred"] as const)
           for (const ebayInternationalShipping of [true, false])
-            expect(PAYOUT_CLASSIFICATION_RULES.some((r) => r.test({ orderDetailsMissing, ownership, destination, ebayInternationalShipping }))).toBe(true);
+            for (const consignorGst of ["registered", "not_registered", "unknown", "none"] as const)
+              expect(PAYOUT_CLASSIFICATION_RULES.some((r) => r.test({ orderDetailsMissing, ownership, destination, ebayInternationalShipping, consignorGst }))).toBe(true);
   });
 
   it("fees map to a configured category for every fee type on both channels", () => {
@@ -72,6 +78,7 @@ describe("the payout classification rules table", () => {
     expect(lineFacts(order({ destinationCountry: "au" }), order().lines[0]!, owned)).toEqual({
       orderDetailsMissing: false,
       ownership: "owned",
+      consignorGst: "none",
       destination: "AU",
       ebayInternationalShipping: false,
     });
@@ -95,7 +102,7 @@ describe("Division 66 status: only assessed when acquisition facts exist", () =>
 
   it("an L- item with no acquisition facts is Sales - GST but Division 66 not assessed", () => {
     const split = baselineSplit(shopifyFixture(), makeResolver([], [], []));
-    expect(split.lines.find((l) => l.sku === "L-DISC-1")).toMatchObject({ category: "SALES_DOMESTIC_GST", ruleId: "R7", division66: "not_assessed" });
+    expect(split.lines.find((l) => l.sku === "L-DISC-1")).toMatchObject({ category: "SALES_DOMESTIC_GST", ruleId: "R8", division66: "not_assessed" });
   });
 });
 
@@ -114,7 +121,7 @@ describe("review-queue facts", () => {
     r = (await rebuildStored(d1, "shopify", "9001"))!;
     expect(r.issues.find((i) => i.code === "destination_referred")).toMatchObject({ severity: "blocking" });
     expect(r.issues.some((i) => i.code === "unknown_destination")).toBe(false);
-    expect(r.baseline!.lines.find((l) => l.sku === "L-DISC-1")!.ruleId).toBe("R4");
+    expect(r.baseline!.lines.find((l) => l.sku === "L-DISC-1")!.ruleId).toBe("R5");
     const page = await (await worker.fetch(new Request("http://local/review"), env(d1))).text();
     expect(page.slice(page.lastIndexOf("<h2>For the accountant"))).toContain("Destination referred for review");
     // Answering it later replaces the referral.
@@ -152,8 +159,9 @@ describe("review-queue facts", () => {
   it("the Rules page lists the table", async () => {
     const { d1 } = makeTestD1();
     const html = await (await worker.fetch(new Request("http://local/rules"), env(d1))).text();
-    for (const id of ["R1", "R2", "R3", "R4", "R5", "R6", "R7"]) expect(html).toContain(`<b>${id}</b>`);
-    expect(html).toContain("Overseas Sales - No GST");
+    for (const id of ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]) expect(html).toContain(`<b>${id}</b>`);
+    expect(html).toContain("Overseas Sales");
+    expect(html).toContain("Commission Sales");
   });
 });
 
@@ -169,7 +177,7 @@ describe("eBay International Shipping", () => {
   it("historical split: overseas, no GST, under its own rule R5", () => {
     const lines = baselineSplit(eis(), resolve()).lines.filter((l) => l.orderId === "26-00002-00002" && l.kind !== "fee");
     expect(lines.every((l) => l.category === "SALES_OVERSEAS_NO_GST")).toBe(true);
-    expect(lines.find((l) => l.kind === "item")!.ruleId).toBe("R5");
+    expect(lines.find((l) => l.kind === "item")!.ruleId).toBe("R6");
   });
 
   it("the GST scenario C2 is GST-free too (confirmed rule)", async () => {

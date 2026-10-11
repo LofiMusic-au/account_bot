@@ -23,12 +23,12 @@ export interface CategoryDef {
 }
 
 export const CATEGORIES: Record<LogicalCategory, CategoryDef> = {
-  SALES_DOMESTIC_GST: { code: "SALES_DOMESTIC_GST", label: "LOFI-owned sale in Australia", historicalAccount: "Sales - GST", qboAccountId: null },
-  SALES_OVERSEAS_NO_GST: { code: "SALES_OVERSEAS_NO_GST", label: "LOFI-owned sale overseas", historicalAccount: "Overseas Sales - No GST", qboAccountId: null },
+  SALES_DOMESTIC_GST: { code: "SALES_DOMESTIC_GST", label: "LOFI-owned sale in Australia", historicalAccount: "Sales", qboAccountId: null },
+  SALES_OVERSEAS_NO_GST: { code: "SALES_OVERSEAS_NO_GST", label: "LOFI-owned sale overseas", historicalAccount: "Overseas Sales", qboAccountId: null },
   CONSIGNMENT_SALES_NO_GST: {
     code: "CONSIGNMENT_SALES_NO_GST",
-    label: "Consignment sale (full amount, no GST; commission handled in the consignment ledger)",
-    historicalAccount: "Consignment sales - No GST",
+    label: "Consignment sale (full amount, GST free; LOFI's share is accounted separately)",
+    historicalAccount: "Commission Sales",
     qboAccountId: null,
   },
   EBAY_FEES: { code: "EBAY_FEES", label: "eBay fees", historicalAccount: "eBay Fees - No GST", qboAccountId: null },

@@ -6,6 +6,10 @@ import type { ReportSummary, SourceInfo } from "./db";
 import type { Channel, FeeCategory, Issue, LineClassification, SourceRef } from "./types";
 import { CATEGORIES, HISTORICAL_BASELINE, type LogicalCategory } from "./accounting/categories";
 import { FEE_CATEGORY_MAP, PAYOUT_CLASSIFICATION_RULES } from "./accounting/baseline";
+import { ACCOUNT_DEFS, TAX_CODES } from "./posting/accounts";
+import type { QboMode } from "./posting/gateway";
+import type { JournalPreview } from "./posting/journal";
+import type { AdjustmentRow, PostingRow } from "./posting/workflow";
 import { periodTotals, type SettlementRule } from "./accounting/consignment";
 import type { ConsignmentRow } from "./db";
 
@@ -93,7 +97,7 @@ form.factform{display:flex;flex-wrap:wrap;gap:6px;align-items:center}form.factfo
 input.money{width:7em}input.pct{width:5em}details.prefix{flex-basis:100%}details.prefix summary{font-size:12px}
 label.inline{display:inline-flex;flex-direction:row;align-items:center;gap:6px;color:var(--fg)}
 </style></head><body>
-<header><b>LOFI payout reconciliation</b><a href="/">Payouts</a><a href="/review">Review queue</a><a href="/consignments">Consignments (shadow)</a><a href="/rules">Rules</a><a href="/stock/new">Add stock record</a>
+<header><b>LOFI payout reconciliation</b><a href="/">Payouts</a><a href="/review">Review queue</a><a href="/consignments">Consignments (shadow)</a><a href="/rules">Rules</a><a href="/qbo">QuickBooks</a><a href="/stock/new">Add stock record</a>
 <span class="muted" style="margin-left:auto">Report-only · nothing is posted to QuickBooks</span></header>
 <main>${body}</main></body></html>`;
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -128,7 +132,7 @@ ${message(msg)}
 <div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap"><form method="post" action="/run" style="display:inline"><button>Fetch new payouts now</button></form>${clearButton(canReset)}</div>
 ${channelToggle("/", channel)}
 <div class="wrap"><table>
-<tr><th>Date</th><th>Channel</th><th>Payout</th><th class="n">Actual payout</th><th class="n">Reconstructed</th><th class="n">Difference</th><th class="n">Sales</th><th>Scenarios</th><th>Status</th></tr>
+<tr><th>Date</th><th>Channel</th><th>Payout</th><th class="n">Actual payout</th><th class="n">Reconstructed</th><th class="n">Difference</th><th class="n">Sales</th><th>Scenarios</th><th>Status</th><th>QuickBooks</th></tr>
 ${rows
   .map((r) => {
     let mix: [string, number][] = [];
@@ -143,10 +147,10 @@ ${rows
 <td class="n">${r.difference_cents === 0 ? "$0.00" : `<span class="unbalanced">${fmt(r.difference_cents)}</span>`}</td>
 <td class="n">${r.sale_count}</td>
 <td class="small">${mix.map(([c, n]) => `${esc(c)} ×${n}`).join(" · ")}</td>
-<td>${statusChips(r.status, r.provisional === 1)}${r.blocking_count ? ` <span class="muted small">${r.blocking_count} to fix</span>` : ""}</td></tr>`;
+<td>${statusChips(r.status, r.provisional === 1)}${r.blocking_count ? ` <span class="muted small">${r.blocking_count} to fix</span>` : ""}</td><td>${postingChip(r.posting_status)}</td></tr>`;
   })
   .join("")}
-${rows.length === 0 ? `<tr><td colspan="9" class="muted">${channel ? `No ${channelName(channel)} payouts yet.` : `No payouts yet. Press "Fetch new payouts now".`}</td></tr>` : ""}
+${rows.length === 0 ? `<tr><td colspan="10" class="muted">${channel ? `No ${channelName(channel)} payouts yet.` : `No payouts yet. Press "Fetch new payouts now".`}</td></tr>` : ""}
 </table></div>`;
   return page("Payouts", body);
 }
@@ -247,7 +251,122 @@ ${r.issues
 </table></div>`;
 }
 
-export function renderReport(r: PayoutReport, src: SourceInfo | null, msg?: string, consignors = new Map<number, string>()): Response {
+export interface PostingView {
+  row: PostingRow | null;
+  events: { at: string; event: string; detail_json: string | null }[];
+  adjustment: AdjustmentRow | null;
+  mode: QboMode;
+}
+
+const POSTING_LABEL: Record<string, string> = {
+  not_ready: "Not ready",
+  ready_for_review: "Ready for review",
+  approved: "Approved",
+  posting: "Posting…",
+  journal_posted: "Journal posted, transfer pending",
+  posted: "Posted",
+  failed: "Posting failed",
+  adjustment_required: "Adjustment required",
+};
+const POSTING_CLASS: Record<string, string> = {
+  not_ready: "review",
+  ready_for_review: "draft",
+  approved: "draft",
+  posting: "draft",
+  journal_posted: "review",
+  posted: "ready",
+  failed: "unbalanced",
+  adjustment_required: "unbalanced",
+};
+export const postingChip = (status: string | null | undefined) =>
+  status ? chip(POSTING_CLASS[status] ?? "draft", POSTING_LABEL[status] ?? status) : "";
+
+function journalTable(p: JournalPreview): string {
+  return `<div class="wrap"><table><tr><th>Account</th><th>Tax code</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">GST incl.</th><th>Evidence</th></tr>
+${p.lines
+  .map(
+    (l) => `<tr><td><b>${esc(l.accountName)}</b> <span class="muted small">${esc(l.accountKey)}</span><div class="small muted">${esc(l.description)}</div></td>
+<td class="small">${esc(l.taxCode ?? "—")}</td>
+<td class="n">${l.postingType === "Debit" ? fmt(l.amountCents) : ""}</td><td class="n">${l.postingType === "Credit" ? fmt(l.amountCents) : ""}</td>
+<td class="n">${l.gstCents ? fmt(l.gstCents) : ""}</td>
+<td class="small muted">${l.kind === "clearing" ? "net payout" : `${l.sources.transactionIds.length} txn · ${l.sources.orderIds.filter(Boolean).length} orders${l.sources.ruleIds.filter(Boolean).length ? ` · rules ${esc(l.sources.ruleIds.filter(Boolean).join(", "))}` : ""}`}</td></tr>`,
+  )
+  .join("")}
+<tr class="total"><td>Total</td><td></td><td class="n">${fmt(p.totalDebitCents)}</td><td class="n">${fmt(p.totalCreditCents)}</td><td></td><td>${p.totalDebitCents === p.totalCreditCents ? `<span class="ready small">balances</span>` : `<span class="unbalanced small">doesn't balance</span>`}</td></tr>
+</table></div>`;
+}
+
+function postingSection(r: PayoutReport, v: PostingView): string {
+  const row = v.row;
+  if (!row) return `<h2>QuickBooks posting</h2><p class="muted">No preview yet. Rebuild the payout to create one.</p>`;
+  const preview = JSON.parse(row.preview_json) as JournalPreview;
+  const reasons = JSON.parse(row.gate_reasons_json) as string[];
+  const back = payoutLink(r.channel, r.payoutId);
+  const modeNote =
+    v.mode === "dry_run"
+      ? `<div class="banner"><b>Dry run.</b> Posting to QuickBooks is switched off. This is exactly what would be posted. Nothing has been or will be written until posting is switched on and you press Post.</div>`
+      : `<div class="banner"><b>Posting is ON (${esc(v.mode)}).</b> Post writes to QuickBooks.</div>`;
+  const actions =
+    row.status === "ready_for_review"
+      ? `<form class="inline" method="post" action="${back}/approve"><button>Approve this journal</button></form>`
+      : ["approved", "failed", "journal_posted"].includes(row.status)
+        ? `<form class="inline" method="post" action="${back}/post"><button ${v.mode === "dry_run" ? "disabled title=\"Dry-run mode\"" : ""}>${row.status === "approved" ? "Post to QuickBooks" : "Retry posting"}</button></form>${v.mode === "dry_run" ? ` <span class="muted small">Approved. Posting is switched off (dry run).</span>` : ""}`
+        : "";
+  const posted =
+    row.journal_id || row.transfer_id
+      ? `<p class="small">Journal <code>${esc(row.journal_id ?? "—")}</code> (${esc(row.journal_doc_number ?? "")}) · transfer <code>${esc(row.transfer_id ?? "pending")}</code>${row.posted_at ? ` · posted ${esc(row.posted_at.slice(0, 16).replace("T", " "))} UTC` : ""}</p>`
+      : "";
+  const adj = v.adjustment
+    ? `<h3 style="font-size:14px">Adjustment ${v.adjustment.seq} (${esc(v.adjustment.status)})</h3>
+<p class="muted small">${esc(v.adjustment.reason)}. The original journal <code>${esc(v.adjustment.original_journal_id)}</code> stays as posted; this adjusting journal corrects it.</p>
+${journalTable(JSON.parse(v.adjustment.preview_json) as JournalPreview)}
+${
+  v.adjustment.status === "pending"
+    ? `<form class="inline" method="post" action="${back}/adjustment-approve"><button>Approve adjustment</button></form>`
+    : `<form class="inline" method="post" action="${back}/adjustment-post"><button ${v.mode === "dry_run" ? "disabled" : ""}>Post adjustment</button></form>`
+}`
+    : "";
+  return `<h2>QuickBooks posting ${postingChip(row.status)}</h2>
+${modeNote}
+${reasons.length ? `<div class="note"><b>Can't be posted yet:</b><ul style="margin:4px 0 0;padding-left:18px">${reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+${row.last_error ? `<div class="note unbalanced">Last attempt: ${esc(row.last_error)}</div>` : ""}
+<p class="small">One journal <code>${esc(preview.docNumber)}</code> dated <b>${esc(preview.txnDate)}</b> (payout date), then one transfer of <b>${fmt(preview.transfer.amountCents)}</b> from <b>${esc(ACCOUNT_DEFS[preview.transfer.fromKey].name)}</b> to <b>${esc(ACCOUNT_DEFS[preview.transfer.toKey].name)}</b>, which is what the bank feed matches.${row.approved_at ? ` Approved ${esc(row.approved_at.slice(0, 16).replace("T", " "))} by ${esc(row.approved_by ?? "")}.` : ""}</p>
+${journalTable(preview)}
+${preview.fx.length ? `<p class="small muted">Foreign currency (marketplace conversion used as recorded): ${preview.fx.map((f) => `${esc(f.currency)} ${esc(f.foreignAmount)} @ ${esc(f.rate ?? "—")} = ${fmt(f.audCents)}`).join("; ")}</p>` : ""}
+${posted}${actions}${adj}
+<details style="margin-top:8px"><summary>Posting history (${v.events.length})</summary><ol class="small">${v.events.map((e) => `<li><code>${esc(e.at.slice(0, 19))}</code> ${esc(e.event)} ${e.detail_json ? `<span class="muted">${esc(e.detail_json)}</span>` : ""}</li>`).join("")}</ol></details>`;
+}
+
+export function renderQboSettings(mode: QboMode, accounts: Map<string, string>, taxCodes: Map<string, string>, msg?: string): Response {
+  const body = `<h1>QuickBooks</h1>
+${message(msg)}
+<div class="banner"><b>Mode: ${esc(mode === "dry_run" ? "dry run (posting switched off)" : mode)}.</b> ${mode === "dry_run" ? "Nothing is written to QuickBooks. To switch posting on later, set QBO_MODE to sandbox (test company first) or live, plus QBO_REALM_ID, QBO_CLIENT_ID, QBO_CLIENT_SECRET and QBO_REFRESH_TOKEN as secrets." : "Approved payouts can be posted."}</div>
+<h2>Accounts</h2>
+<p class="muted small">Logical accounts used by the journals. "Confirmed" names come from LOFI's chart of accounts. Others are placeholders to agree. Posting needs a QuickBooks ID for every account a journal uses. Set them with <code>POST /api/qbo/map</code>.</p>
+<div class="wrap"><table><tr><th>Key</th><th>Account</th><th>Type / detail</th><th>Tax code</th><th>QuickBooks ID</th></tr>
+${Object.values(ACCOUNT_DEFS)
+  .map(
+    (a) => `<tr><td><code>${esc(a.key)}</code></td><td>${esc(a.name)} ${a.confirmed ? chip("approved", "confirmed") : chip("draft", "to confirm")}</td><td class="small">${esc(a.type)} / ${esc(a.detailType)}</td>
+<td class="small">${esc(a.taxCode ?? "—")}</td><td>${accounts.get(a.key) ? `<code>${esc(accounts.get(a.key))}</code>` : `<span class="muted">not set</span>`}</td></tr>`,
+  )
+  .join("")}
+</table></div>
+<h2>Tax codes</h2>
+<div class="wrap"><table><tr><th>Tax code</th><th>QuickBooks ID</th></tr>
+${TAX_CODES.map((t) => `<tr><td>${esc(t)}</td><td>${taxCodes.get(t) ? `<code>${esc(taxCodes.get(t))}</code>` : `<span class="muted">not set</span>`}</td></tr>`).join("")}
+</table></div>
+<h2>Locked rules</h2>
+<ul class="small">
+<li>One journal per payout, dated on the payout date, through the channel clearing account. One transfer clearing → bank for the exact payout, which the bank feed matches.</li>
+<li>Hard gate: no posting unless the payout difference is $0.00, every line is classified, there are no blocking review issues, and it hasn't been posted.</li>
+<li>Fees: eBay and PayPal → GST free purchases (0%). Shopify, Afterpay and ZIP → GST on purchases (10%). Unknown fee types block.</li>
+<li>FX: the marketplace's own AUD amount and rate, as recorded. No third-party rate.</li>
+<li>One payout = at most one journal and one transfer. Retries look up QuickBooks first. A change after posting becomes a linked adjusting journal, and the original is never edited.</li>
+</ul>`;
+  return page("QuickBooks", body);
+}
+
+export function renderReport(r: PayoutReport, src: SourceInfo | null, msg?: string, consignors = new Map<number, string>(), posting?: PostingView): Response {
   if (r.version !== REPORT_VERSION || !r.breakdown) {
     return page(
       `Payout ${r.payoutId}`,
@@ -298,6 +417,7 @@ ${b.unsupportedCents ? `<tr><td class="review">Unsupported transaction types (co
 ${r.warnings.length ? `<h2>Notes</h2><div class="note"><ul style="margin:0;padding-left:18px">${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
 
 ${baselineSection(r)}
+${posting ? postingSection(r, posting) : ""}
 
 <h2>By draft GST scenario</h2>
 <div class="wrap"><table><tr><th>Scenario</th><th>Sign-off</th><th class="n">Lines</th><th class="n">Amount</th><th class="n">GST</th></tr>
