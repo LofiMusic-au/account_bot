@@ -22,7 +22,9 @@ import { ingestAndReport } from "../src/index";
 import type { NormalisedPayout } from "../src/types";
 import { makeTestD1 } from "../test/helpers";
 
-const [channel, arg, ...rest] = process.argv.slice(2);
+const [channel, rawArg, ...rest] = process.argv.slice(2);
+// Accept --scan, -scan or scan.
+const arg = rawArg && /^-{0,2}scan$/.test(rawArg) ? "--scan" : rawArg;
 const fixtureName = rest[0] === "--fixture" ? rest[1] : undefined;
 const root = join(import.meta.dirname, "..");
 // Values come from the shell first, then .dev.vars (git-ignored, the same file
@@ -276,7 +278,7 @@ async function shopify() {
   const p = payouts.find((x) => x.legacyResourceId === arg);
   if (!p) throw new Error(`Payout ${arg} not found in the last 30 days`);
   const raw = await client.fetchRaw(p);
-  const payout = normaliseShopifyPayout(raw.payout, raw.transactions, raw.orders);
+  const payout = normaliseShopifyPayout(raw.payout, raw.transactions, raw.orders, raw.orderErrors);
   for (const d of client.deprecations) payout.warnings.push(`Deprecation: ${d}`);
   const v = await verify(payout);
   const rows: (string | number)[][] = [["Balance txn ID", "Type", "Order", "Amount", "Fee", "Net (contribution)", "Order total", "Currency", "Mapping notes"]];

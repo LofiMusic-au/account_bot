@@ -1,0 +1,89 @@
+{
+ "_note": "Masked from a live Shopify Payments payout (2026-10-08): 2 charges and a refund. gids, order numbers and payout IDs replaced; amounts, types and field shapes kept. Balance transactions carry no buyer data.",
+ "payout": {
+  "id": "gid://shopify/ShopifyPaymentsPayout/9900001",
+  "legacyResourceId": "9900001",
+  "issuedAt": "2026-10-08T00:00:00Z",
+  "status": "PAID",
+  "transactionType": "DEPOSIT",
+  "net": {
+   "amount": "338.23",
+   "currencyCode": "AUD"
+  }
+ },
+ "transactions": [
+  {
+   "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/990001",
+   "type": "CHARGE",
+   "sourceType": "CHARGE",
+   "test": false,
+   "transactionDate": "2026-10-05T14:22:14Z",
+   "adjustmentReason": null,
+   "amount": {
+    "amount": "66.95",
+    "currencyCode": "AUD"
+   },
+   "fee": {
+    "amount": "2.64",
+    "currencyCode": "AUD"
+   },
+   "net": {
+    "amount": "64.31",
+    "currencyCode": "AUD"
+   },
+   "associatedOrder": {
+    "id": "gid://shopify/Order/99001",
+    "name": "#LIVE-1"
+   }
+  },
+  {
+   "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/990002",
+   "type": "CHARGE",
+   "sourceType": "CHARGE",
+   "test": false,
+   "transactionDate": "2026-10-06T05:41:28Z",
+   "adjustmentReason": null,
+   "amount": {
+    "amount": "284.05",
+    "currencyCode": "AUD"
+   },
+   "fee": {
+    "amount": "5.13",
+    "currencyCode": "AUD"
+   },
+   "net": {
+    "amount": "278.92",
+    "currencyCode": "AUD"
+   },
+   "associatedOrder": {
+    "id": "gid://shopify/Order/99002",
+    "name": "#LIVE-2"
+   }
+  },
+  {
+   "id": "gid://shopify/ShopifyPaymentsBalanceTransaction/990003",
+   "type": "REFUND",
+   "sourceType": "REFUND",
+   "test": false,
+   "transactionDate": "2026-10-07T04:10:46Z",
+   "adjustmentReason": null,
+   "amount": {
+    "amount": "-5.0",
+    "currencyCode": "AUD"
+   },
+   "fee": {
+    "amount": "0.0",
+    "currencyCode": "AUD"
+   },
+   "net": {
+    "amount": "-5.0",
+    "currencyCode": "AUD"
+   },
+   "associatedOrder": {
+    "id": "gid://shopify/Order/99003",
+    "name": "#LIVE-3"
+   }
+  }
+ ],
+ "orders": []
+}

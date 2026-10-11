@@ -128,7 +128,7 @@ Built on 4a without changing the architecture. Not merged to `main`.
 
 ### Shopify (store "LOFI Music", lofi-music.myshopify.com, AUD, `taxesIncluded: true`)
 
-**Live payout validation is blocked.** No available credential has the Shopify Payments scope (see `docs/live-validation-2026-10.md`). The API version is now pinned to `2026-10`.
+**Live-validated:** three payouts reconcile to $0.00 through a Dev Dashboard app using the client credentials grant. Order details are still blocked until the app gets `read_orders`. See `docs/live-validation-2026-10.md`. The API version is pinned to `2026-10`.
 
 - All three GraphQL queries in `channels/shopify.ts` were **validated against Shopify's live Admin schema**.
 - Real orders show gateways `shopify_payments` and `Afterpay`, with `sourceName: "web"`. Shopify charges 10% GST on every line and on shipping, including consignment items. That is the core error the system corrects. Example: order #3252, Korg Wavestation, $854.05. Shopify GST is $77.64; at 25% commission under B1 it should be $19.41.

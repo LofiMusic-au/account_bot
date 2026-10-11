@@ -2,6 +2,7 @@
 // replaced; amounts and field shapes are as eBay sent them.
 
 import { describe, expect, it } from "vitest";
+import { normaliseShopifyPayout, type ShopifyBalanceTxn, type ShopifyPayout } from "../src/channels/shopify";
 import { normaliseEbayPayout, type EbayOrder, type EbayPayout, type EbayTransaction } from "../src/channels/ebay";
 import { convertAtRate } from "../src/money";
 import { buildReport } from "../src/reconcile";
@@ -99,5 +100,19 @@ describe("live eBay payout shapes", () => {
     delete t.amount.exchangeRate;
     const p = normaliseEbayPayout(f.payout, f.transactions, new Map());
     expect(p.issues.some((i) => i.code === "non_aud_transaction" && /no exchange rate/.test(i.message))).toBe(true);
+  });
+});
+
+describe("live Shopify Payments payout shape", () => {
+  it("charges and a refund reconcile to the cent; net = amount - fee; held for review without order access", () => {
+    const f = loadFixture<{ payout: ShopifyPayout; transactions: ShopifyBalanceTxn[] }>("live/shopify-charges-refund.json");
+    const errors = new Map(f.transactions.flatMap((t) => (t.associatedOrder ? [[t.associatedOrder.id, "Access denied for Order object"]] : [])) as [string, string][]);
+    const p = normaliseShopifyPayout(f.payout, f.transactions, new Map(), errors);
+    const r = buildReport(p, () => null);
+    expect(r.netCents).toBe(33823);
+    expect(r.differenceCents).toBe(0);
+    expect(r.breakdown).toMatchObject({ salesGrossCents: 35100, refundsCents: 500, feesCents: 777 });
+    expect(p.issues.filter((i) => i.code === "order_details_missing").every((i) => /Access denied/.test(i.message))).toBe(true);
+    expect(r.status).toBe("needs_review");
   });
 });

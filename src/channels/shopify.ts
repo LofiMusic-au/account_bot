@@ -207,15 +207,27 @@ export class ShopifyClient {
     return map;
   }
 
-  async fetchRaw(p: ShopifyPayout): Promise<{ payout: ShopifyPayout; transactions: ShopifyBalanceTxn[]; orders: Map<string, ShopifyOrder> }> {
+  async fetchRaw(p: ShopifyPayout): Promise<{
+    payout: ShopifyPayout;
+    transactions: ShopifyBalanceTxn[];
+    orders: Map<string, ShopifyOrder>;
+    orderErrors: Map<string, string>;
+  }> {
     const transactions = await this.payoutTransactions(p.legacyResourceId);
     const orderIds = [...new Set(transactions.map((t) => t.associatedOrder?.id).filter((x): x is string => !!x))];
-    return { payout: p, transactions, orders: await this.orders(orderIds) };
+    // Order details failing (e.g. a missing read_orders scope) mustn't stop the
+    // payout being reconciled; each affected sale is held with the reason.
+    try {
+      return { payout: p, transactions, orders: await this.orders(orderIds), orderErrors: new Map() };
+    } catch (e) {
+      const msg = (e as Error).message.split(";")[0]!.slice(0, 300);
+      return { payout: p, transactions, orders: new Map(), orderErrors: new Map(orderIds.map((id) => [id, msg])) };
+    }
   }
 
   async fetchPayout(p: ShopifyPayout): Promise<NormalisedPayout> {
     const raw = await this.fetchRaw(p);
-    const payout = normaliseShopifyPayout(raw.payout, raw.transactions, raw.orders);
+    const payout = normaliseShopifyPayout(raw.payout, raw.transactions, raw.orders, raw.orderErrors);
     for (const d of this.deprecations) payout.warnings.push(`Shopify API ${this.cfg.apiVersion} reports a deprecation used by this app: ${d}`);
     return payout;
   }
@@ -312,6 +324,7 @@ export function normaliseShopifyPayout(
   p: ShopifyPayout,
   txns: ShopifyBalanceTxn[],
   orders: Map<string, ShopifyOrder>,
+  orderErrors: Map<string, string> = new Map(),
 ): NormalisedPayout {
   const warnings: string[] = [];
   const issues: Issue[] = [];
@@ -371,7 +384,14 @@ export function normaliseShopifyPayout(
     } else if (t.type === "REFUND" && orderId) {
       const o = orders.get(orderId);
       if (!o) {
-        issues.push({ code: "order_details_missing", severity: "blocking", message: `${orderName}: refunded order not found`, orderId, transactionId: t.id });
+        const why = orderErrors.get(orderId);
+        issues.push({
+          code: "order_details_missing",
+          severity: "blocking",
+          message: `${orderName}: refunded order not available${why ? ` (${why})` : ""}`,
+          orderId,
+          transactionId: t.id,
+        });
       }
       refunds.push({
         orderId,
@@ -423,7 +443,13 @@ export function normaliseShopifyPayout(
   for (const [orderId, charge] of chargesByOrder) {
     const o = orders.get(orderId);
     if (!o) {
-      issues.push({ code: "order_details_missing", severity: "blocking", message: `${charge.name}: order details not found`, orderId });
+      const why = orderErrors.get(orderId);
+      issues.push({
+        code: "order_details_missing",
+        severity: "blocking",
+        message: `${charge.name}: order details not available${why ? ` (${why})` : ""}`,
+        orderId,
+      });
       sales.push({
         orderId,
         orderName: charge.name,

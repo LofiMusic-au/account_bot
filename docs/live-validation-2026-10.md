@@ -70,18 +70,56 @@ These are masked copies of live shapes in `test/fixtures/live/`. IDs are replace
 
 ## Shopify Payments
 
-**Not run.** None of the available credentials can read Shopify Payments:
-- **Claude's Shopify connector:** "Access denied for shopifyPaymentsAccount field. Required access: `read_shopify_payments` or `read_shopify_payments_accounts`".
-- **The admin token in the Migrator project:** it has product, inventory and file scopes only, with no orders or payments.
-- **The shipping-integration project:** it holds a placeholder token.
+**Credentials used:** a Dev Dashboard app for LOFI, authenticated with the client credentials grant (a 24-hour token). It has the Shopify Payments payout and account scopes, but **not `read_orders` yet**. So order details (SKUs, shipping, discounts, destination) couldn't be read. Every sale is held as `order_details_missing`, with Shopify's "Access denied for Order object" as the reason. Nothing is classified or guessed.
 
-Done so far:
-- **API version:** pinned to `2026-10`. All three queries validate against the current schema. The order query ran live against the store, and every field returned.
-- **Store data checked:** the most recent five orders. Their gateways were `shopify_payments`, `Afterpay` and `paypal`. Only `shopify_payments` orders settle through Shopify Payments payouts.
+| Payout date | Contents | Actual payout | Reconstructed | Difference |
+|---|---|---|---|---|
+| 2026-10-08 | 2 charges, 1 refund | $338.23 | $338.23 | $0.00 |
+| 2026-10-07 | 6 charges | $2,609.24 | $2,609.24 | $0.00 |
+| 2026-10-02 | 3 charges | $5,396.31 | $5,396.31 | $0.00 |
 
-To finish the Shopify half, create a custom app token with `read_orders` and `read_shopify_payments` (Shopify's validator also lists `read_shopify_payments_accounts`), then run:
+In every payout:
+- Every normalised record carries its Shopify balance transaction ID.
+- Ingesting the payout twice produced no duplicate rows.
+- No unsupported transaction type was found.
 
-```bash
-SHOPIFY_SHOP=lofi-music.myshopify.com SHOPIFY_ADMIN_TOKEN=… npx vite-node scripts/live-validate.ts shopify --scan
-SHOPIFY_SHOP=lofi-music.myshopify.com SHOPIFY_ADMIN_TOKEN=… npx vite-node scripts/live-validate.ts shopify <payoutId>
-```
+A 30-day scan found only `CHARGE` and `REFUND`. No adjustments, chargebacks, reserves or shipping labels were seen.
+
+### Field mappings confirmed
+
+- **Balance transaction amounts:** `amount` is the gross charge, `fee` is the Shopify Payments processing fee, and `net` = `amount − fee` on every row.
+- **Refund fees:** the refund carried `fee` 0.00, so there was no processing-fee credit on that refund.
+- **The payout filter is right.** `balanceTransactions(query: "payments_transfer_id:<payout legacyResourceId>", hideTransfers: true)` returns exactly the payout's transactions. Their nets sum to `payout.net` to the cent, and the payout's own transfer line is excluded.
+- **Amount format:** amounts can come with one decimal place, e.g. `"-5.0"`, and they parse correctly.
+- **Scopes for this route:** an app with the Shopify Payments payout and account scopes can read `shopifyPaymentsAccount.payouts` and `balanceTransactions`.
+
+### Terminology: Shopify vs the internal model
+
+| Shopify | Internal model |
+|---|---|
+| Payout `net` | `NormalisedPayout.netCents` (the actual payout) |
+| Balance transaction `CHARGE` `amount` | the sale's `grossCents` (items + shipping, after discounts, GST-inclusive) |
+| `CHARGE` `fee` | a `Fee` in the `payment` category (`shopify_payments_fee`) |
+| `REFUND` `amount` (negative) | a `Refund` with positive `cents` |
+| `SHIPPING_LABEL*` | a `Fee` in the `shipping_label` category |
+| `ADJUSTMENT`, `RESERVED_FUNDS*`, `CHARGEBACK_HOLD*` and similar | an `Adjustment` (supported) |
+| `DISPUTE_*` | an `Adjustment` plus a blocking `dispute` issue |
+| any other type, including `CURRENCY_CONVERSION` (new in 2026-10) | an unsupported `Adjustment` that blocks the payout |
+
+### Changed
+
+- **Authentication:** Dev Dashboard apps don't show a `shpat_` token. The client now exchanges `SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET` for a token. `SHOPIFY_ADMIN_TOKEN` still works.
+- **Order errors:** a failed order lookup (for example a missing scope) no longer aborts the payout. The payout reconciles, and each sale carries the reason.
+
+### Regression fixture
+
+`test/fixtures/live/shopify-charges-refund.json` is a masked copy of the 8 October payout.
+
+### Still to validate on Shopify
+
+- **Order data:** add `read_orders` to the app, release the new version and approve it on the store. Then re-run `npm run live:validate -- shopify 143669428399` to compare against the orders:
+  - items, shipping and discounts per order
+  - charges against order totals
+  - the refund's reversal against its original order
+  - destinations, including local pickup
+- **Fee GST:** the GST on the Shopify Payments fee awaits the accountant (D1).
