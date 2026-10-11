@@ -264,3 +264,10 @@ export function buildReport(payout: NormalisedPayout, resolve: StockResolver, no
     generatedAt: now.toISOString(),
   };
 }
+
+/** Scenario counts over sold item lines only (no shipping, no refunds). */
+export function saleScenarioCounts(r: Pick<PayoutReport, "sales">): [string, number][] {
+  const m = new Map<string, number>();
+  for (const l of r.sales) if (l.kind === "item") m.set(l.scenario, (m.get(l.scenario) ?? 0) + 1);
+  return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
+}

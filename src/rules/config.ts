@@ -112,6 +112,7 @@ export const FEE_TAX: Record<string, TaxCode> = {
   ebay_other_fee: "PENDING",
   shopify_payments_fee: "PENDING",
   shopify_shipping_label: "PENDING",
+  shopify_chargeback_fee: "PENDING",
 };
 
 /**

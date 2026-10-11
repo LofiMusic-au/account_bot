@@ -1,6 +1,6 @@
 // D1 access: stock/consignor facts, source provenance, and payout reports.
 
-import type { PayoutReport } from "./reconcile";
+import { saleScenarioCounts, type PayoutReport } from "./reconcile";
 import type { StockResolver } from "./rules/engine";
 import type {
   AcquiredFrom,
@@ -310,7 +310,7 @@ export async function sourceInfo(db: D1Database, channel: string, payoutId: stri
 // ------------------------------------------------------------------ reports
 
 export async function saveReport(db: D1Database, r: PayoutReport): Promise<void> {
-  const summary = r.totals.byScenario.filter((s) => s.code !== "SHIPPING").map((s) => [s.code, s.count]);
+  const summary = saleScenarioCounts(r);
   await db
     .prepare(
       `INSERT INTO payout_reports (channel, payout_id, payout_date, net_cents, expected_cents, difference_cents,

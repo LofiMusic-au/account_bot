@@ -10,12 +10,17 @@ Read `HANDOFF.md` first for the full project context, the decisions made and the
 - **Money is integer cents** (`src/money.ts`). Use `allocate()` for any split so the parts always add up to the total.
 - **Payouts must reconcile to the cent.** A difference is surfaced as `unbalanced`, never absorbed.
 - Platform-specific logic belongs in `src/channels/*`. Everything after normalisation is channel-neutral.
+- **Store facts, derive treatment.** Stock records hold ownership, acquisition source, condition, consignor and so on. Scenarios, GST and Division 66 candidacy are derived in `src/rules/engine.ts` and never stored on the item.
+- **Unknown means review.** A missing fact, an unknown platform transaction type or an unresolved scenario must produce a blocking issue, never a default.
+- **Unsigned-off means provisional.** Tests for unsigned-off scenarios assert the draft arithmetic *and* that the result is provisional; they must not read as statements of law.
+- **Keep provenance.** Every normalised record carries a `SourceRef`. Raw transactions are stored in `source_transactions` with buyer details removed.
+- **Branches.** Work on feature branches; don't merge to `main` without being asked.
 
 ## Commands
 
 - `npm test`: vitest. Keep every scenario covered when changing rules.
-- `npm run typecheck`
-- `npm run dev`: local Worker. Run `npm run db:migrate:local` first; demo data comes from `scripts/demo-sql.ts`.
+- `npm run typecheck`: checks `src` against Workers types and `test`/`scripts` against Node types.
+- `npm run dev`: local Worker. Run `npm run db:migrate:local`, `npm run demo:sql` and `npm run demo:load` first.
 - `npm run deploy`
 
 ## Conventions

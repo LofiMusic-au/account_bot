@@ -1,7 +1,7 @@
 // Server-rendered dashboard. Plain HTML, no build step.
 
 import { fmt } from "./money";
-import { FEE_CATEGORIES, REPORT_VERSION, type PayoutReport } from "./reconcile";
+import { FEE_CATEGORIES, REPORT_VERSION, saleScenarioCounts, type PayoutReport } from "./reconcile";
 import type { ReportSummary, SourceInfo } from "./db";
 import type { FeeCategory, Issue, LineClassification, SourceRef } from "./types";
 
@@ -228,7 +228,7 @@ export function renderReport(r: PayoutReport, src: SourceInfo | null, msg?: stri
   const b = r.breakdown;
   const back = payoutLink(r.channel, r.payoutId);
   const itemLines = r.sales.filter((l) => l.kind === "item");
-  const scenarioCounts = t.byScenario.filter((s) => s.code !== "SHIPPING");
+  const scenarioCounts = saleScenarioCounts(r);
   const body = `
 <p class="muted"><a href="/">← Payouts</a></p>
 <h1>${channelName(r.channel)} payout ${esc(r.payoutId)} — ${esc(r.payoutDate)}</h1>
@@ -243,8 +243,8 @@ ${r.provisional ? `<div class="banner"><b>Provisional.</b> Every GST treatment h
 <div class="tile"><div class="muted">Division 66 credits (draft)</div><div class="v">${fmt(t.notionalItcCents)}</div></div>
 </div>
 <p><b>${r.saleCount} sales</b>, ${itemLines.length} item lines${scenarioCounts.length ? ": " : ""}${scenarioCounts
-    .map((s) => `${s.count} ${esc(s.code)}`)
-    .join(" · ")}${r.blockingCount ? ` · <span class="review">${r.blockingCount} to fix</span>` : ""}</p>
+    .map(([code, n]) => `${n} ${esc(code)}${code === "REVIEW" ? " unresolved" : ""}`)
+    .join(" · ")}${r.refunds.length ? ` · ${r.refunds.filter((l) => l.kind === "item").length} refunded line(s)` : ""}${r.blockingCount ? ` · <span class="review">${r.blockingCount} to fix</span>` : ""}</p>
 <form class="inline" method="post" action="${back}/rebuild"><button class="alt">Rebuild with latest facts</button></form>
 <form class="inline" method="post" action="${back}/refetch"><button class="alt">Fetch again from ${channelName(r.channel)}</button></form>
 
@@ -297,7 +297,7 @@ export function renderReview(items: ReviewItem[], consignors: Map<number, string
   // One row per distinct problem: the same unknown SKU in three payouts is one fix.
   const groups = new Map<string, { issue: Issue; title: string | null; reports: PayoutReport[] }>();
   for (const { report: r, issue: i } of items) {
-    const key = i.sku ? `${i.code}|sku|${i.sku.toUpperCase()}` : i.consignorId ? `${i.code}|c|${i.consignorId}` : `${i.code}|${r.channel}|${r.payoutId}|${i.orderId ?? ""}|${i.transactionId ?? ""}|${i.message}`;
+    const key = i.code === "unknown_destination" ? `${i.code}|${r.channel}|${i.orderId}` : i.sku ? `${i.code}|sku|${i.sku.toUpperCase()}` : i.consignorId ? `${i.code}|c|${i.consignorId}` : `${i.code}|${r.channel}|${r.payoutId}|${i.orderId ?? ""}|${i.transactionId ?? ""}|${i.message}`;
     const g = groups.get(key) ?? { issue: i, title: null, reports: [] };
     g.title ??= [...r.sales, ...r.refunds].find((l) => l.lineId === i.lineId)?.title ?? null;
     if (!g.reports.includes(r)) g.reports.push(r);
@@ -312,8 +312,8 @@ ${message(msg)}
 ${rows
   .map(({ issue: i, title, reports }) => {
     const first = reports[0]!;
-    return `<tr><td><b>${esc(ISSUE_LABEL[i.code] ?? i.code)}</b>${i.sku ? `<div><code>${esc(i.sku)}</code></div>` : ""}</td>
-<td>${title ? `${esc(title)}<br>` : ""}<span class="muted small">${esc(i.message)}</span></td>
+    return `<tr><td><b>${esc(ISSUE_LABEL[i.code] ?? i.code)}</b>${i.sku && i.code !== "unknown_destination" ? `<div><code>${esc(i.sku)}</code></div>` : ""}</td>
+<td>${i.code === "unknown_destination" ? `Order ${esc(first.sales.find((l) => l.orderId === i.orderId)?.orderName ?? i.orderId)}<br>` : title ? `${esc(title)}<br>` : ""}<span class="muted small">${esc(i.message)}</span></td>
 <td class="small">${reports.map((r) => `<a href="${payoutLink(r.channel, r.payoutId)}">${channelName(r.channel)} ${esc(r.payoutDate)}</a>`).join("<br>")}</td>
 <td>${fixFor(i, first.channel, title, "/review", i.consignorId ? consignors.get(i.consignorId) : undefined) || `<a class="small" href="${payoutLink(first.channel, first.payoutId)}">Open payout</a>`}</td></tr>`;
   })

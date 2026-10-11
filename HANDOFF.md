@@ -78,43 +78,49 @@ When a scenario is signed off, set `signedOff: true` (plus `signedOffBy` and `si
 
 ---
 
-## 4. What's built (milestone 1, commit `3f2fb4d`)
+## 4. What's built
 
-```
-src/
-  index.ts            Worker: cron (daily, 20:00 UTC ≈ 6–7am Sydney) + dashboard routes + JSON intake API
-  types.ts            Channel-neutral model: NormalisedPayout, OrderSale, SaleLine, Refund, Fee, Adjustment, StockItem, LineClassification
-  money.ts            toCents, fmt, gstInclusive (1/11), allocate (largest remainder)
-  reconcile.ts        buildReport(): classify all lines, totals by scenario, cents-exact payout check -> status ready | needs_review | unbalanced
-  db.ts               D1: makeResolver (item record > longest SKU prefix rule), loadResolver, save/list/get reports, stock + consignor upserts, validation
-  ui.ts               Server-rendered HTML (light/dark): payouts list, payout detail, review queue, stock/consignor forms
-  rules/config.ts     Scenarios + sign-off flags, accounts, FEE_TAX, EIS decision, Div 66 threshold
-  rules/engine.ts     classifyLine / classifyShipping / classifyOrder / rescaleOrder / commissionFor / div66Credit
-  channels/shopify.ts Admin GraphQL: payouts, balance transactions per payout, orders -> NormalisedPayout
-  channels/ebay.ts    OAuth refresh, Finances API (payouts, transactions by payoutId), Fulfillment getOrder -> NormalisedPayout
-migrations/0001_init.sql  consignors, stock_items, sku_prefix_rules, payout_reports
-scripts/demo-sql.ts       Builds demo data from real LOFI order shapes for local D1
-test/                     32 vitest tests (all passing): every scenario, Div 66 cap/threshold, commission override, precedence, shipping, refunds, both normalisers, reconciliation
-```
+### 4a. Milestone 1 import (commit `3f2fb4d`)
 
-**Dashboard routes:**
+The original Cowork build: both channel clients, the rules engine, cents-exact reconciliation, the D1 schema (`0001_init.sql`) and the dashboard.
 
-- `GET /`: list of payouts
-- `POST /run`: fetch new payouts
-- `GET /payout/:channel/:id`: payout detail
-- `POST /payout/:channel/:id/rerun`: rebuild a payout
-- `GET /review`: review queue
-- `GET /stock/new`: stock form
-- `POST /stock`, `POST /consignors`: save stock records and consignors
-- `POST /api/stock`: bulk JSON intake. Validates everything first and rejects the whole batch on any error.
+### 4b. Foundation stage (branch `feature/payout-reconciliation-foundation`, 11 Oct 2026)
+
+Built on 4a without changing the architecture. Not merged to `main`.
+
+- **Money** is parsed from the platforms' decimal strings digit by digit. GST, commission (basis points) and allocation use integer arithmetic only. Sub-cent amounts are refused, not rounded.
+- **Facts, not conclusions.** Stock items now record `item_condition` (new or second-hand) and accept `acquired_from = other`. Consignors have an explicit unknown GST status (`gst_status` NULL). The engine derives the scenario and Division 66 candidacy from these facts and writes an explanation trace on every line.
+- **No more defaults.** Previously, LOFI-owned stock with no acquisition source became A1, and an order with no destination counted as domestic. Both now go to review. A3 (trade-in) is held for review, like C2, until the accountant decides (`TRADE_IN_TREATMENT`).
+- **Issues.** There are two kinds: *blocking* (a missing fact or numbers that don't add up) and *awaiting sign-off* (unsigned scenario, pending fee GST, the C4 FX policy). Status stays `ready | needs_review | unbalanced`. A separate `provisional` flag marks every payout that uses an unsigned treatment, which today is all of them.
+- **Platform types.**
+  - Shopify's known types come from the live `ShopifyPaymentsTransactionType` enum. eBay's known adjustments are CREDIT, ADJUSTMENT and DISPUTE.
+  - Anything else is counted in the total, so the difference stays honest, but it blocks the payout as `unsupported_transaction_type`.
+  - Disputes are always blocking.
+  - Fees are categorised as marketplace, payment, advertising, shipping label or other.
+- **eBay's balance check is circular.** Because gross = net + fees, the payout total alone can't prove the gross. A SALE whose derived gross differs from the Fulfillment order now raises a blocking `sale_amount_mismatch`, where before it was only a warning.
+- **Provenance and idempotency (`0002_provenance_and_facts.sql`).**
+  - `source_payouts` holds the payout payload plus the normalised payout, so reports can be rebuilt without the API.
+  - `source_transactions` is keyed on channel, type and platform ID. It stores the payload with buyer details removed, a hash, and first-ingested, last-ingested and changed timestamps.
+  - `source_orders` holds selected fields only, with no names or street addresses.
+  - Re-fetching updates rows in place. A transaction already recorded under another payout raises a blocking `transaction_in_other_payout` and is never reassigned.
+- **Dashboard.**
+  - The payouts list shows actual, reconstructed and difference, plus a scenario mix and a provisional marker.
+  - Payout detail shows the full breakdown by fee category, an issues table with fix buttons, "Why A2?" traces and source IDs on every row.
+  - The review queue groups each problem once and offers one-click fact answers: ownership, acquisition source, condition, consignor GST, and destination. Every open payout is rebuilt from stored data after a fact is saved.
+- **Routes added:** `POST /payout/:channel/:id/rebuild` (from stored data), `/refetch` (from the platform; `/rerun` still works), `POST /facts/stock`, `POST /facts/consignor`, `POST /facts/order`.
+- **Security:** the dashboard token comparison is constant-time. Fact routes only redirect to same-site paths.
+- **Tests: 69 passing.**
+  - eBay and Shopify fixtures (`test/fixtures/`) reconcile to the cent. Between them they have discounts, refunds, multi-line orders, every fee category, adjustments and unknown types.
+  - The storage tests run the real migrations on node:sqlite. They cover idempotent re-import, change detection, cross-payout duplicates and fact corrections.
+  - A guard test fails if any QuickBooks host appears in `src/`.
+
+**Verified:** `npm run typecheck` (src and tests) is clean and all 69 tests pass. `wrangler dev --local` was run with the new demo data: every route returned 200/303, and the fact buttons were exercised over HTTP. After unknown-SKU, acquisition-source and destination answers, Shopify payout 9001 went from needs review to ready (provisional).
+
+**Not done here:** no live Shopify or eBay payout has been read yet. No deploy has been made.
+
+**Dashboard routes (all):** `GET /`, `POST /run`, `GET /payout/:channel/:id`, `POST …/rebuild`, `POST …/refetch`, `GET /review`, `POST /facts/stock`, `POST /facts/consignor`, `POST /facts/order`, `GET /stock/new`, `POST /stock`, `POST /consignors`, `POST /api/stock`.
 
 **Auth:** set the `DASHBOARD_TOKEN` secret (visit `?token=…` once to get a cookie), or put the Worker behind Cloudflare Access (preferred).
-
-**Verified:**
-
-- `tsc --noEmit` is clean.
-- All 32 tests pass.
-- `wrangler dev --local` was run with demo data. Every route returned 200/303, and the report page rendered correctly. On the demo payout ($2,491.84): $0.00 difference, GST $139.49, Division 66 credit $54.55, and the C1 export and B1 consignment split were correct.
 
 ---
 
@@ -129,7 +135,10 @@ test/                     32 vitest tests (all passing): every scenario, Div 66 
   - `hideTransfers: true` excludes the payout line itself.
   - Refund `fee` handling.
   - Treating `SHIPPING_*` types as fees.
-- Required scopes for the custom app: `read_orders`, `read_shopify_payments` (payouts and balance transactions), and possibly `read_shopify_payments_accounts`.
+- Required scopes for the custom app: `read_orders`, and `read_shopify_payments_payouts` or `read_shopify_payments`. Shopify's docs list either one for balance transactions.
+- The `payments_transfer_id` filter on `balanceTransactions` exists in the live schema. Whether it takes the payout's `legacyResourceId` is still unverified.
+- `SHOPIFY_API_VERSION` is `2025-10`. Shopify now documents `2026-07`, so check that 2025-10 is still supported before deploying, and bump it if not.
+- Orders with no shipping address, such as local pickup, now go to review for destination. Fetching `fulfillmentOrders.deliveryMethod` would detect pickup automatically, but it needs an extra scope.
 - Afterpay (and PayPal) orders **don't** settle through Shopify Payments, so they won't appear. They need their own settlement channel later.
 
 ### eBay
@@ -192,7 +201,9 @@ From about 500 of the 2,927 Shopify variants (the newest 250 and the oldest 250)
 
 ### Known rough edges
 
-- **Shipping scenario label:** a shipping line takes the first item line's scenario code, so shipping adds to that scenario's count in the "By scenario" table. A separate `SHIP` pseudo-scenario would be clearer.
+- **Shipping scenario label:** fixed. Shipping lines are grouped as `SHIPPING` in the "By scenario" table and left out of scenario counts.
+- **Consignment agreement type** still defaults to `agency` in the schema. A GST-registered consignor without an explicit agreement is classified B2_AGENCY, not sent to review. Change this if Luke can't confirm every agreement.
+- **Unsigned-off scenarios** make every payout provisional. This is intended and will stay so until sign-off.
 - **Refund fee handling:** Shopify's refund fee and eBay's fee credits on refunds are recorded simply. Verify them on real data.
 - **Bulk intake errors:** `POST /api/stock` rejects the whole batch if any row is invalid. That's intentional.
 
@@ -202,11 +213,11 @@ From about 500 of the 2,927 Shopify variants (the newest 250 and the oldest 250)
 
 ```bash
 npm install
-npm test                      # 32 tests
-npm run typecheck
+npm test                      # 69 tests
+npm run typecheck             # src + test configs
 npm run db:migrate:local
-npx vite-node scripts/demo-sql.ts > .wrangler/demo.sql
-npx wrangler d1 execute lofi-recon --local --file .wrangler/demo.sql
+npm run demo:sql              # real ingest path over the test fixtures
+npm run demo:load
 npm run dev                   # http://localhost:8787
 ```
 
