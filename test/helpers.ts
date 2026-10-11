@@ -74,16 +74,44 @@ export const FIXTURE_STOCK: StockRow[] = [
   stock("L-mk3-0010230-300726", { acquired_from: "private_seller", item_condition: "secondhand", purchase_cents: 60000, ...div66Record }),
 ];
 export const FIXTURE_CONSIGNORS: ConsignorRow[] = [
-  { id: 1, name: "Private consignor", gst_registered: 0, gst_status: "not_registered", commission_type: "percent", commission_value: 25, agreement_type: "agency" },
+  {
+    id: 1,
+    name: "Overseas private consignor",
+    country: "JP",
+    australian_gst_registered: 0,
+    australian_gst_basis: "intake_default_overseas",
+    commission_type: "percent",
+    commission_value: 25,
+    agreement_type: null,
+  },
 ];
 export const FIXTURE_PREFIXES: PrefixRow[] = [];
 export const fixtureResolver = () => makeResolver(FIXTURE_STOCK, FIXTURE_PREFIXES, FIXTURE_CONSIGNORS);
 
 /** The subset of D1 this codebase uses, over an in-memory SQLite with every migration applied. */
+export function migrationFiles(): string[] {
+  return readdirSync(join(root, "migrations")).filter((x: string) => x.endsWith(".sql")).sort();
+}
+/** Apply migrations the way D1 does: each file in its own transaction, foreign keys enforced. */
+export function applyMigrations(sqlite: DatabaseSync, files = migrationFiles()) {
+  for (const f of files) {
+    sqlite.exec("BEGIN");
+    try {
+      sqlite.exec(readFileSync(join(root, "migrations", f), "utf8"));
+      sqlite.exec("COMMIT");
+    } catch (e) {
+      sqlite.exec("ROLLBACK");
+      throw new Error(`${f}: ${(e as Error).message}`);
+    }
+  }
+}
+export function newSqlite(): DatabaseSync {
+  return new DatabaseSync(":memory:");
+}
+
 export function makeTestD1(): { d1: D1Database; sqlite: DatabaseSync } {
   const sqlite = new DatabaseSync(":memory:");
-  const dir = join(root, "migrations");
-  for (const f of readdirSync(dir).filter((x: string) => x.endsWith(".sql")).sort()) sqlite.exec(readFileSync(join(dir, f), "utf8"));
+  applyMigrations(sqlite);
   type P = (string | number | null)[];
   const stmt = (sql: string, params: P = []) => ({
     bind: (...p: unknown[]) => stmt(sql, p as P),
@@ -116,8 +144,11 @@ export function makeTestD1(): { d1: D1Database; sqlite: DatabaseSync } {
 export function seedFixtureFacts(sqlite: DatabaseSync) {
   for (const c of FIXTURE_CONSIGNORS) {
     sqlite
-      .prepare("INSERT INTO consignors (id, name, gst_registered, gst_status, commission_type, commission_value, agreement_type) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(c.id, c.name, c.gst_registered, c.gst_status ?? null, c.commission_type, c.commission_value, c.agreement_type);
+      .prepare(
+        `INSERT INTO consignors (id, name, country, australian_gst_registered, australian_gst_basis, commission_type, commission_value, agreement_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(c.id, c.name, c.country, c.australian_gst_registered, c.australian_gst_basis, c.commission_type, c.commission_value, c.agreement_type);
   }
   for (const s of FIXTURE_STOCK) {
     sqlite

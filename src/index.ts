@@ -16,7 +16,10 @@ import {
   loadStoredPayout,
   reportExists,
   saveReport,
+  setConsignorAgreement,
   setConsignorGst,
+  validateConsignor,
+  type ConsignorInput,
   setOrderDestination,
   setStockFact,
   sourceInfo,
@@ -28,7 +31,7 @@ import {
 import { toCents } from "./money";
 import { buildReport, type PayoutReport } from "./reconcile";
 import type { Channel, Issue, NormalisedPayout } from "./types";
-import { renderIndex, renderReport, renderReview, renderStockForm, type ReviewItem } from "./ui";
+import { renderIndex, renderReport, renderReview, renderStockForm, type ConsignorOption, type ReviewItem } from "./ui";
 
 export interface Env {
   DB: D1Database;
@@ -182,12 +185,9 @@ async function form(req: Request): Promise<Record<string, string>> {
 }
 
 async function consignorList(env: Env) {
-  return (await env.DB.prepare("SELECT id, name, gst_registered, gst_status FROM consignors ORDER BY name").all<{
-    id: number;
-    name: string;
-    gst_registered: number;
-    gst_status: string | null;
-  }>()).results;
+  return (
+    await env.DB.prepare("SELECT id, name, country, australian_gst_registered, agreement_type FROM consignors ORDER BY name").all<ConsignorOption>()
+  ).results;
 }
 
 export default {
@@ -258,12 +258,16 @@ export default {
       const f = await form(req);
       const back = safeReturn(f.return);
       const id = Number(f.id);
-      if (!Number.isInteger(id) || (f.gst !== "registered" && f.gst !== "not_registered")) {
-        return redirect(withMsg(back, "Choose registered or not registered"));
+      if (!Number.isInteger(id)) return redirect(withMsg(back, "Unknown consignor"));
+      if (f.gst === "registered" || f.gst === "not_registered") {
+        await setConsignorGst(env.DB, id, f.gst === "registered");
+      } else if (f.agreement === "agency" || f.agreement === "153B") {
+        await setConsignorAgreement(env.DB, id, f.agreement);
+      } else {
+        return redirect(withMsg(back, "Choose an answer"));
       }
-      await setConsignorGst(env.DB, id, f.gst === "registered");
       const n = await rebuildOpen(env.DB);
-      return redirect(withMsg(back, `Saved consignor GST status; ${n} open payout(s) rebuilt`));
+      return redirect(withMsg(back, `Saved consignor fact; ${n} open payout(s) rebuilt`));
     }
 
     if (req.method === "POST" && path === "/facts/order") {
@@ -320,17 +324,31 @@ export default {
 
     if (req.method === "POST" && path === "/consignors") {
       const f = await form(req);
-      if (!f.name) return redirect(withMsg("/stock/new", "Consignor name is required"));
-      await addConsignor(env.DB, {
+      const input: Partial<ConsignorInput> = {
         name: f.name,
         contact: f.contact,
-        gst_registered: f.gst_registered === "1" ? true : f.gst_registered === "0" ? false : null,
+        country: f.country,
+        australian_gst_registered: f.australian_gst === "yes" ? true : f.australian_gst === "no" ? false : f.australian_gst === "unknown" ? null : "auto",
         abn: f.abn,
         commission_type: "percent",
         commission_value: f.commission_value ? Number(f.commission_value) : 0,
-        agreement_type: f.agreement_type,
-      });
+        agreement_type: f.agreement_type === "agency" || f.agreement_type === "153B" ? f.agreement_type : null,
+      };
+      const errs = validateConsignor(input);
+      if (errs.length) return redirect(withMsg("/stock/new", errs.join("; ")));
+      await addConsignor(env.DB, input as ConsignorInput);
       return redirect(withMsg("/stock/new", `Added consignor ${f.name}`));
+    }
+
+    // JSON API for scripted consignor intake. Validates everything first.
+    if (req.method === "POST" && path === "/api/consignors") {
+      const body = (await req.json()) as Partial<ConsignorInput> | Partial<ConsignorInput>[];
+      const items = Array.isArray(body) ? body : [body];
+      const errors = items.map((x, i) => ({ i, errs: validateConsignor(x) })).filter((x) => x.errs.length);
+      if (errors.length) return Response.json({ ok: false, errors }, { status: 400 });
+      const ids: number[] = [];
+      for (const x of items) ids.push(await addConsignor(env.DB, x as ConsignorInput));
+      return Response.json({ ok: true, ids });
     }
 
     // JSON API for scripted intake (e.g. from the legacy stock sheet).

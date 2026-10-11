@@ -13,6 +13,7 @@
 
 import { allocate, applyBasisPoints, fmt, gstInclusive, percentToBasisPoints, toCents } from "../money";
 import type {
+  Consignor,
   Issue,
   IssueCode,
   LineClassification,
@@ -255,7 +256,15 @@ export function pickScenario(order: OrderSale, item: StockItem): Pick {
     if (item.ownership === "consignment") {
       const missing = consignorFacts();
       if (missing) return missing;
-      why.push(`agreement = ${item.consignor!.agreementType}`);
+      const c = item.consignor!;
+      const gst = consignorGstFacts(c, why);
+      if (gst) return gst;
+      if (c.australianGstRegistered) {
+        const agreement = consignorAgreementFacts(c, why);
+        if (agreement) return agreement;
+      } else {
+        why.push(`agreement = ${c.agreementType ?? "not recorded (not needed for a non-registered consignor)"}`);
+      }
       return { scenario: "C3", why };
     }
     if (item.acquiredFrom) why.push(`source_type = ${SOURCE_LABEL[item.acquiredFrom]}`);
@@ -311,19 +320,50 @@ export function pickScenario(order: OrderSale, item: StockItem): Pick {
   const missing = consignorFacts();
   if (missing) return missing;
   const c = item.consignor!;
-  if (c.gstRegistered === null) {
+  const gst = consignorGstFacts(c, why);
+  if (gst) return gst;
+  if (!c.australianGstRegistered) {
+    why.push(`agreement = ${c.agreementType ?? "not recorded (not needed for a non-registered consignor)"}`);
+    return { scenario: "B1", why };
+  }
+  const agreement = consignorAgreementFacts(c, why);
+  if (agreement) return agreement;
+  return { scenario: c.agreementType === "153B" ? "B2_153B" : "B2_AGENCY", why };
+}
+
+/** Australian GST registration of a consignor: unknown -> review. */
+function consignorGstFacts(c: Consignor, why: string[]): Pick | null {
+  if (c.australianGstRegistered === null) {
     return {
       scenario: "REVIEW",
-      why: [...why, "consignor_gst_registered = unknown"],
+      why: [...why, `consignor_country = ${c.country ?? "unknown"}`, "australian_gst_registered = unknown"],
       code: "unknown_consignor_gst_status",
-      reason: `Consignor ${c.name}: GST registration isn't recorded`,
+      reason: `Consignor ${c.name}: Australian GST registration isn't recorded`,
       extra: { consignorId: c.id },
     };
   }
-  why.push(`consignor_gst_registered = ${c.gstRegistered ? "yes" : "no"}`);
-  if (!c.gstRegistered) return { scenario: "B1", why };
+  why.push(`consignor_country = ${c.country ?? "unknown"}`);
+  why.push(
+    `australian_gst_registered = ${c.australianGstRegistered ? "yes" : "no"}${
+      c.australianGstBasis === "intake_default_overseas" ? " (intake default for an overseas consignor)" : ""
+    }`,
+  );
+  return null;
+}
+
+/** Agency vs 153-B for a GST-registered consignor: never defaulted. */
+function consignorAgreementFacts(c: Consignor, why: string[]): Pick | null {
+  if (c.agreementType === null) {
+    return {
+      scenario: "REVIEW",
+      why: [...why, "agreement = unknown"],
+      code: "unknown_consignor_agreement",
+      reason: `Consignor ${c.name} is GST-registered: agency or Subdivision 153-B isn't recorded`,
+      extra: { consignorId: c.id },
+    };
+  }
   why.push(`agreement = ${c.agreementType}`);
-  return { scenario: c.agreementType === "153B" ? "B2_153B" : "B2_AGENCY", why };
+  return null;
 }
 
 /** Classify one sale line (never shipping; see classifyShipping). */
@@ -386,13 +426,16 @@ export function classifyLine(order: OrderSale, line: SaleLine, item: StockItem |
     case "B1":
     case "B2_AGENCY":
     case "C3": {
+      if (item.consignor && item.consignor.australianGstRegistered === false && item.consignor.agreementType === "153B") {
+        flags.push("Agreement recorded as Subdivision 153-B, but the consignor isn't registered for Australian GST: check with the accountant");
+      }
       const commission = item.consignor || item.commissionType ? commissionFor(item, g, line.quantity) : null;
       if (commission === null) {
         return review(order, line, "unknown_commission", "Consigned item has no commission rate", why, flags);
       }
       const payable = g - commission;
       why.push(`commission = ${fmt(commission)} of ${fmt(g)}`);
-      if (scenario === "C3" && item.consignor?.agreementType === "153B") {
+      if (scenario === "C3" && item.consignor?.australianGstRegistered === true && item.consignor.agreementType === "153B") {
         return result(order, line, "C3", "Consigned (153-B) item exported: LOFI's export sale", why, [exportFree(ACCOUNTS.exportSales, g, "153-B consignment exported")], {
           flags: [...flags, `Consignor's supply to LOFI (${fmt(payable)}) to be recorded as a bill`],
         });

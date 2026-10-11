@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ingestAndReport, rebuildStored } from "../src/index";
-import { setConsignorGst, setOrderDestination, setStockFact, getReport } from "../src/db";
-import { ebayFixture, makeTestD1, seedFixtureFacts, shopifyFixture } from "./helpers";
+import { addConsignor, setConsignorAgreement, setConsignorGst, setOrderDestination, setStockFact, getReport } from "../src/db";
+import { applyMigrations, ebayFixture, makeTestD1, migrationFiles, newSqlite, seedFixtureFacts, shopifyFixture } from "./helpers";
 
 const count = (sqlite: ReturnType<typeof makeTestD1>["sqlite"], table: string) =>
   (sqlite.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
@@ -90,7 +90,7 @@ describe("staff correct facts, not tax codes", () => {
   it("consignor GST status unknown -> recorded -> classified", async () => {
     const { d1, sqlite } = makeTestD1();
     seedFixtureFacts(sqlite);
-    sqlite.prepare("UPDATE consignors SET gst_status = NULL").run();
+    sqlite.prepare("UPDATE consignors SET australian_gst_registered = NULL, australian_gst_basis = NULL").run();
     let r = await ingestAndReport(d1, shopifyFixture());
     expect(r.issues.find((i) => i.code === "unknown_consignor_gst_status")).toMatchObject({ consignorId: 1 });
     await setConsignorGst(d1, 1, false);
@@ -120,5 +120,66 @@ describe("milestone 1 can't write to QuickBooks", () => {
     expect(src).not.toMatch(/intuit\.com|quickbooks\.api|oauth\.platform\.intuit/i);
     const hosts = [...src.matchAll(/https:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]!.toLowerCase());
     expect(new Set(hosts.filter((h) => !h.endsWith("ebay.com")))).toEqual(new Set());
+  });
+});
+
+describe("consignor facts", () => {
+  it("migration 0003 keeps GST answers, resets agreement types to unknown and keeps stock links", () => {
+    const sqlite = newSqlite();
+    const files = migrationFiles();
+    applyMigrations(sqlite, files.filter((f) => f < "0003"));
+    sqlite.prepare("INSERT INTO consignors (id, name, gst_registered, gst_status, agreement_type) VALUES (5, 'Reg', 1, 'registered', 'agency')").run();
+    sqlite.prepare("INSERT INTO consignors (id, name, gst_registered, gst_status, agreement_type) VALUES (6, 'Unknown', 0, NULL, 'agency')").run();
+    sqlite.prepare("INSERT INTO stock_items (sku, ownership, consignor_id) VALUES ('C-1', 'consignment', 5)").run();
+    applyMigrations(sqlite, files.filter((f) => f >= "0003"));
+    expect(sqlite.prepare("SELECT id, australian_gst_registered, australian_gst_basis, agreement_type FROM consignors ORDER BY id").all()).toEqual([
+      { id: 5, australian_gst_registered: 1, australian_gst_basis: "recorded", agreement_type: null },
+      { id: 6, australian_gst_registered: null, australian_gst_basis: null, agreement_type: null },
+    ]);
+    expect(sqlite.prepare("SELECT c.name FROM stock_items s JOIN consignors c ON c.id = s.consignor_id").get()).toEqual({ name: "Reg" });
+    // A new consignor gets no agreement by default.
+    sqlite.prepare("INSERT INTO consignors (name) VALUES ('New')").run();
+    expect(sqlite.prepare("SELECT agreement_type, australian_gst_registered FROM consignors WHERE name = 'New'").get()).toEqual({
+      agreement_type: null,
+      australian_gst_registered: null,
+    });
+  });
+
+  it("an overseas consignor added at intake defaults to not registered for Australian GST, and sales go to B1", async () => {
+    const { d1, sqlite } = makeTestD1();
+    seedFixtureFacts(sqlite);
+    const id = await addConsignor(d1, { name: "Tokyo seller", country: "jp", australian_gst_registered: "auto", commission_value: 20 });
+    expect(sqlite.prepare("SELECT country, australian_gst_registered, australian_gst_basis, agreement_type FROM consignors WHERE id = ?").get(id)).toEqual({
+      country: "JP",
+      australian_gst_registered: 0,
+      australian_gst_basis: "intake_default_overseas",
+      agreement_type: null,
+    });
+    sqlite.prepare("UPDATE stock_items SET consignor_id = ? WHERE sku = 'RM-256549-001196-140526'").run(id);
+    const r = await ingestAndReport(d1, shopifyFixture());
+    const l = r.sales.find((x) => x.sku === "RM-256549-001196-140526")!;
+    expect(l.scenario).toBe("B1");
+    expect(l.explanation).toContain("australian_gst_registered = no (intake default for an overseas consignor)");
+    expect(l.explanation).toContain("agreement = not recorded (not needed for a non-registered consignor)");
+  });
+
+  it("an Australian consignor added at intake is asked, not defaulted", async () => {
+    const { d1, sqlite } = makeTestD1();
+    const id = await addConsignor(d1, { name: "Sydney seller", country: "AU" });
+    expect(sqlite.prepare("SELECT australian_gst_registered FROM consignors WHERE id = ?").get(id)).toEqual({ australian_gst_registered: null });
+  });
+
+  it("a GST-registered consignor with no agreement goes to review until the agreement is recorded", async () => {
+    const { d1, sqlite } = makeTestD1();
+    seedFixtureFacts(sqlite);
+    await setConsignorGst(d1, 1, true);
+    let r = await ingestAndReport(d1, shopifyFixture());
+    expect(r.issues.find((i) => i.code === "unknown_consignor_agreement")).toMatchObject({ consignorId: 1, severity: "blocking" });
+    expect(r.status).toBe("needs_review");
+    await setConsignorAgreement(d1, 1, "agency");
+    r = (await rebuildStored(d1, "shopify", "9001"))!;
+    expect(r.sales.find((x) => x.sku === "RM-256549-001196-140526")!.scenario).toBe("B2_AGENCY");
+    expect(r.status).toBe("ready");
+    expect(r.provisional).toBe(true);
   });
 });

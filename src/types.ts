@@ -155,6 +155,7 @@ export type IssueCode =
   | "unknown_supplier_gst_status"
   | "unknown_consignor"
   | "unknown_consignor_gst_status"
+  | "unknown_consignor_agreement"
   | "unknown_commission"
   | "unknown_purchase_price"
   | "unknown_destination"
@@ -205,12 +206,20 @@ export type Condition = "new" | "secondhand";
 export interface Consignor {
   id: number;
   name: string;
-  /** null = not recorded yet. */
-  gstRegistered: boolean | null;
+  /** ISO-2 country, null = not recorded. */
+  country: string | null;
+  /**
+   * Registered for *Australian* GST. null = unknown. Registration for VAT/GST
+   * in another country is a different fact and is never inferred from this.
+   */
+  australianGstRegistered: boolean | null;
+  /** How australianGstRegistered was set: by a person, or defaulted at intake for an overseas consignor. */
+  australianGstBasis: "recorded" | "intake_default_overseas" | null;
   commissionType: "percent" | "fixed";
   /** Percent (25 = 25%) or fixed AUD per unit, as entered. */
   commissionValue: number;
-  agreementType: "agency" | "153B";
+  /** null = not recorded. Never defaulted: it decides B2_AGENCY vs B2_153B. */
+  agreementType: "agency" | "153B" | null;
 }
 
 /** Facts about one stock item. Tax treatment is derived from these, never stored. */

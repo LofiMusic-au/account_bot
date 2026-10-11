@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { allocate, applyBasisPoints, divRound, gstInclusive, toCents } from "../src/money";
 import { classifyLine, classifyOrder, isDivision66Candidate, rescaleOrder } from "../src/rules/engine";
 import { SCENARIOS } from "../src/rules/config";
-import { makeResolver } from "../src/db";
+import { australianGstAtIntake, makeResolver, validateConsignor } from "../src/db";
 import type { Consignor, LineClassification, OrderSale, StockItem } from "../src/types";
 
 const order = (over: Partial<OrderSale> = {}): OrderSale => ({
@@ -35,10 +35,12 @@ const secondhand = (over: Partial<StockItem> = {}) => owned({ acquiredFrom: "pri
 const consignor = (over: Partial<Consignor> = {}): Consignor => ({
   id: 1,
   name: "John Smith",
-  gstRegistered: false,
+  country: "US",
+  australianGstRegistered: false,
+  australianGstBasis: "recorded",
   commissionType: "percent",
   commissionValue: 20,
-  agreementType: "agency",
+  agreementType: null,
   ...over,
 });
 const consigned = (c: Partial<Consignor> = {}, over: Partial<StockItem> = {}): StockItem => ({
@@ -194,7 +196,7 @@ describe("missing facts go to review, never to a guess", () => {
     expect(classifyLine(o, line(o), secondhand({ condition: "new" })).scenario).toBe("REVIEW");
   });
   it("consignor with unknown GST status", () => {
-    const r = classifyLine(o, line(o), consigned({ gstRegistered: null }));
+    const r = classifyLine(o, line(o), consigned({ australianGstRegistered: null }));
     expect(r.scenario).toBe("REVIEW");
     expect(r.issues[0]).toMatchObject({ code: "unknown_consignor_gst_status", consignorId: 1 });
   });
@@ -226,13 +228,46 @@ describe("B: consignment (all unsigned-off)", () => {
       ["Consignor Payable", "NO_GST", 88000, 0],
       ["Consignment Commission Income", "GST", 22000, 2000],
     ]);
-    expect(r.explanation).toContain("consignor_gst_registered = no");
+    expect(r.explanation).toContain("australian_gst_registered = no");
     expectProvisional(r);
+  });
+
+  it("B1 doesn't need an agreement type", () => {
+    const o = order();
+    const r = classifyLine(o, line(o), consigned({ agreementType: null }));
+    expect(r.scenario).toBe("B1");
+    expect(r.explanation).toContain("agreement = not recorded (not needed for a non-registered consignor)");
+  });
+
+  it("GST-registered consignor with no recorded agreement -> review, never agency by default", () => {
+    const o = order();
+    const r = classifyLine(o, line(o), consigned({ australianGstRegistered: true, agreementType: null }));
+    expect(r.scenario).toBe("REVIEW");
+    expect(r.issues[0]).toMatchObject({ code: "unknown_consignor_agreement", severity: "blocking", consignorId: 1 });
+    expect(r.explanation).toContain("agreement = unknown");
+  });
+
+  it("an exported consigned item from a registered consignor also needs the agreement", () => {
+    const us = order({ destinationCountry: "US", shippingProgram: "direct_export" });
+    const r = classifyLine(us, line(us), consigned({ australianGstRegistered: true, agreementType: null }));
+    expect(r.issues.map((i) => i.code)).toEqual(["unknown_consignor_agreement"]);
+  });
+
+  it("153-B recorded for a non-registered consignor stays B1 and is flagged for the accountant", () => {
+    const o = order();
+    const r = classifyLine(o, line(o), consigned({ agreementType: "153B" }));
+    expect(r.scenario).toBe("B1");
+    expect(r.flags.join()).toMatch(/153-B.*isn't registered for Australian GST/);
+    const us = order({ destinationCountry: "US", shippingProgram: "direct_export" });
+    expect(classifyLine(us, line(us), consigned({ agreementType: "153B" })).postings.map((p) => p.account)).toEqual([
+      "Consignor Payable",
+      "Consignment Commission Income",
+    ]);
   });
 
   it("B2 agency: draft, consignor reports GST on the sale", () => {
     const o = order();
-    const r = classifyLine(o, line(o), consigned({ gstRegistered: true }));
+    const r = classifyLine(o, line(o), consigned({ australianGstRegistered: true, agreementType: "agency" }));
     expect(r.scenario).toBe("B2_AGENCY");
     expect(r.gstCents).toBe(2000);
     expectProvisional(r);
@@ -240,7 +275,7 @@ describe("B: consignment (all unsigned-off)", () => {
 
   it("B2 153-B: draft, LOFI reports GST on the full sale and records a bill", () => {
     const o = order();
-    const r = classifyLine(o, line(o), consigned({ gstRegistered: true, agreementType: "153B" }));
+    const r = classifyLine(o, line(o), consigned({ australianGstRegistered: true, agreementType: "153B" }));
     expect(r.scenario).toBe("B2_153B");
     expect(r.gstCents).toBe(10000);
     expect(r.flags.join()).toMatch(/\$880\.00/);
@@ -311,15 +346,16 @@ describe("precedence and lookups", () => {
       { prefix: "RM-", ownership: "owned", acquired_from: "registered_supplier", consignor_id: null, commission_type: null, commission_value: null },
       { prefix: "RM-25", ownership: "owned", acquired_from: "private_seller", consignor_id: null, commission_type: null, commission_value: null },
     ],
-    [{ id: 1, name: "J", gst_registered: 0, gst_status: null, commission_type: "percent", commission_value: 25, agreement_type: "agency" }],
+    [{ id: 1, name: "J", country: null, australian_gst_registered: null, australian_gst_basis: null, commission_type: "percent", commission_value: 25, agreement_type: null }],
   );
 
   it("an item's own record beats a prefix rule", () => {
     expect(resolve("rm-1")?.ownership).toBe("consignment");
     expect(resolve("rm-1")?.consignor?.commissionValue).toBe(25);
   });
-  it("consignor GST status unknown is kept as unknown", () => {
-    expect(resolve("rm-1")?.consignor?.gstRegistered).toBeNull();
+  it("consignor GST status and agreement unknown are kept as unknown", () => {
+    expect(resolve("rm-1")?.consignor?.australianGstRegistered).toBeNull();
+    expect(resolve("rm-1")?.consignor?.agreementType).toBeNull();
   });
   it("longest prefix wins, and the explanation names it", () => {
     expect(resolve("RM-256549-001196-140526")?.acquiredFrom).toBe("private_seller");
@@ -366,5 +402,20 @@ describe("shipping and refunds", () => {
     expect(refund[0]!.scenario).toBe("B1");
     expect(refund[0]!.grossCents).toBe(-55000);
     expect(refund[0]!.gstCents).toBe(-1000);
+  });
+});
+
+describe("consignor intake defaults", () => {
+  it("overseas consignors default to not registered for Australian GST; others are asked", () => {
+    expect(australianGstAtIntake("US", "auto")).toEqual({ registered: false, basis: "intake_default_overseas" });
+    expect(australianGstAtIntake("au", "auto")).toEqual({ registered: null, basis: null });
+    expect(australianGstAtIntake(null, "auto")).toEqual({ registered: null, basis: null });
+    expect(australianGstAtIntake("US", true)).toEqual({ registered: true, basis: "recorded" });
+    expect(australianGstAtIntake("US", null)).toEqual({ registered: null, basis: null });
+  });
+  it("validates consignor input", () => {
+    expect(validateConsignor({ name: "A", country: "USA" })).toEqual(["country must be a two-letter code, e.g. US or JP"]);
+    expect(validateConsignor({ name: "A", agreement_type: "agent" as never })).toHaveLength(1);
+    expect(validateConsignor({ name: "A", country: "JP", australian_gst_registered: "auto", agreement_type: null })).toEqual([]);
   });
 });

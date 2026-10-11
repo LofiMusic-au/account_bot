@@ -28,7 +28,8 @@ const ISSUE_LABEL: Record<string, string> = {
   unknown_condition: "New or second-hand unknown",
   unknown_supplier_gst_status: "Supplier GST status unknown",
   unknown_consignor: "Consignor unknown",
-  unknown_consignor_gst_status: "Consignor GST status unknown",
+  unknown_consignor_gst_status: "Consignor's Australian GST registration unknown",
+  unknown_consignor_agreement: "Consignment agreement type unknown",
   unknown_commission: "Commission rate unknown",
   unknown_purchase_price: "Purchase price unknown",
   unknown_destination: "Destination unknown",
@@ -177,9 +178,15 @@ ${options.map(([v, label]) => `<button class="alt" name="value" value="${esc(v)}
       return `<div class="small muted">Condition when bought?</div>${factButtons("item_condition", [["new", "New"], ["secondhand", "Second-hand"]])}${stockForm}`;
     case "unknown_consignor_gst_status":
       return issue.consignorId
-        ? `<div class="small muted">Is ${esc(consignorName ?? `consignor #${issue.consignorId}`)} registered for GST?</div>
+        ? `<div class="small muted">Is ${esc(consignorName ?? `consignor #${issue.consignorId}`)} registered for <b>Australian</b> GST?</div>
 <form class="inline" method="post" action="/facts/consignor">${hidden("id", issue.consignorId)}${hidden("return", back)}
 <button class="alt" name="gst" value="registered">Registered</button><button class="alt" name="gst" value="not_registered">Not registered</button></form>`
+        : "";
+    case "unknown_consignor_agreement":
+      return issue.consignorId
+        ? `<div class="small muted">Which arrangement does LOFI's written agreement with ${esc(consignorName ?? `consignor #${issue.consignorId}`)} set up?</div>
+<form class="inline" method="post" action="/facts/consignor">${hidden("id", issue.consignorId)}${hidden("return", back)}
+<button class="alt" name="agreement" value="agency">Ordinary agency</button><button class="alt" name="agreement" value="153B">Subdivision 153-B</button></form>`
         : "";
     case "unknown_destination":
       return issue.orderId
@@ -323,13 +330,23 @@ ${rows.length === 0 ? `<tr><td colspan="4" class="muted">Nothing to review.</td>
   return page("Review queue", body);
 }
 
+export interface ConsignorOption {
+  id: number;
+  name: string;
+  country: string | null;
+  australian_gst_registered: number | null;
+  agreement_type: string | null;
+}
+
 export function renderStockForm(
   prefill: { sku?: string; title?: string },
-  consignors: { id: number; name: string; gst_registered: number; gst_status: string | null }[],
+  consignors: ConsignorOption[],
   msg?: string,
 ): Response {
-  const gstLabel = (c: { gst_status: string | null }) =>
-    c.gst_status === "registered" ? " (GST-registered)" : c.gst_status === null ? " (GST status unknown)" : "";
+  const gstLabel = (c: ConsignorOption) =>
+    `${c.country ? ` · ${c.country}` : ""}${
+      c.australian_gst_registered === 1 ? " · AU GST-registered" : c.australian_gst_registered === null ? " · AU GST unknown" : ""
+    }`;
   const body = `<h1>Stock record</h1>
 <p class="muted">Record the facts once per item. The GST scenario is worked out from them and follows the item to whichever channel it sells on.</p>
 ${message(msg)}
@@ -356,10 +373,11 @@ ${message(msg)}
 <form class="grid" method="post" action="/consignors">
 <label>Name<input name="name" required></label>
 <label>Contact<input name="contact"></label>
-<label>GST-registered<select name="gst_registered"><option value="">Not sure yet</option><option value="0">No</option><option value="1">Yes</option></select></label>
+<label>Country (two letters)<input name="country" maxlength="2" placeholder="US, JP, AU…"></label>
+<label>Registered for Australian GST<select name="australian_gst"><option value="auto">Automatic: No if overseas, otherwise ask</option><option value="no">No</option><option value="yes">Yes</option><option value="unknown">Not sure yet</option></select></label>
 <label>ABN<input name="abn"></label>
 <label>Default commission %<input name="commission_value" inputmode="decimal"></label>
-<label>Agreement<select name="agreement_type"><option value="agency">Agency</option><option value="153B">Subdivision 153-B</option></select></label>
+<label>Agreement (needed only if registered for Australian GST)<select name="agreement_type"><option value="">Not recorded</option><option value="agency">Ordinary agency</option><option value="153B">Subdivision 153-B</option></select></label>
 <div style="align-self:end"><button>Add consignor</button></div>
 </form>`;
   return page("Stock record", body);

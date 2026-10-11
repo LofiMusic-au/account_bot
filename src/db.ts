@@ -17,11 +17,12 @@ import type {
 export interface ConsignorRow {
   id: number;
   name: string;
-  gst_registered: number;
-  gst_status?: "registered" | "not_registered" | null;
+  country: string | null;
+  australian_gst_registered: number | null;
+  australian_gst_basis: "recorded" | "intake_default_overseas" | null;
   commission_type: "percent" | "fixed";
   commission_value: number;
-  agreement_type: "agency" | "153B";
+  agreement_type: "agency" | "153B" | null;
 }
 export interface StockRow {
   sku: string;
@@ -52,12 +53,12 @@ export interface PrefixRow {
 const toConsignor = (r: ConsignorRow): Consignor => ({
   id: r.id,
   name: r.name,
-  // gst_status is the source of truth; gst_registered only for rows from before migration 0002.
-  gstRegistered:
-    r.gst_status === undefined ? r.gst_registered === 1 : r.gst_status === null ? null : r.gst_status === "registered",
+  country: r.country,
+  australianGstRegistered: r.australian_gst_registered === null ? null : r.australian_gst_registered === 1,
+  australianGstBasis: r.australian_gst_basis,
   commissionType: r.commission_type,
   commissionValue: r.commission_value,
-  agreementType: r.agreement_type,
+  agreementType: r.agreement_type === "agency" || r.agreement_type === "153B" ? r.agreement_type : null,
 });
 
 /** Pure resolver over preloaded rows: an item's own record beats the longest matching prefix. */
@@ -507,39 +508,86 @@ export async function setStockFact(db: D1Database, sku: string, field: FactField
     .run();
 }
 
+/** Record a consignor's Australian GST registration (by a person). */
 export async function setConsignorGst(db: D1Database, id: number, registered: boolean): Promise<void> {
   await db
-    .prepare("UPDATE consignors SET gst_status = ?, gst_registered = ? WHERE id = ?")
-    .bind(registered ? "registered" : "not_registered", registered ? 1 : 0, id)
+    .prepare("UPDATE consignors SET australian_gst_registered = ?, australian_gst_basis = 'recorded' WHERE id = ?")
+    .bind(registered ? 1 : 0, id)
     .run();
 }
 
-export async function addConsignor(
-  db: D1Database,
-  c: {
-    name: string;
-    contact?: string;
-    gst_registered: boolean | null;
-    abn?: string;
-    commission_type?: string;
-    commission_value?: number;
-    agreement_type?: string;
-  },
-): Promise<number> {
+export async function setConsignorAgreement(db: D1Database, id: number, agreement: "agency" | "153B"): Promise<void> {
+  if (agreement !== "agency" && agreement !== "153B") throw new Error("Agreement must be agency or 153B");
+  await db.prepare("UPDATE consignors SET agreement_type = ? WHERE id = ?").bind(agreement, id).run();
+}
+
+export interface ConsignorInput {
+  name: string;
+  contact?: string | null;
+  /** ISO-2. */
+  country?: string | null;
+  /**
+   * true / false as recorded by a person, null = not sure yet, "auto" =
+   * default to false for an overseas consignor and unknown otherwise.
+   */
+  australian_gst_registered?: boolean | null | "auto";
+  abn?: string | null;
+  commission_type?: "percent" | "fixed";
+  commission_value?: number;
+  agreement_type?: "agency" | "153B" | null;
+}
+
+export function validateConsignor(c: Partial<ConsignorInput>): string[] {
+  const errs: string[] = [];
+  if (!c.name?.trim()) errs.push("name is required");
+  if (c.country && !/^[A-Za-z]{2}$/.test(c.country.trim())) errs.push("country must be a two-letter code, e.g. US or JP");
+  if (c.australian_gst_registered !== undefined && ![true, false, null, "auto"].includes(c.australian_gst_registered as never))
+    errs.push("australian_gst_registered must be true, false, null or \"auto\"");
+  if (c.agreement_type !== undefined && c.agreement_type !== null && !["agency", "153B"].includes(c.agreement_type))
+    errs.push("agreement_type must be agency, 153B or null (unknown)");
+  if (c.commission_type && !["percent", "fixed"].includes(c.commission_type)) errs.push("commission_type must be percent or fixed");
+  if (c.commission_value !== undefined && (!Number.isFinite(c.commission_value) || c.commission_value < 0))
+    errs.push("commission_value must be a number of at least 0");
+  return errs;
+}
+
+/**
+ * Intake default for Australian GST registration. Most LOFI consignors are
+ * overseas and not registered for Australian GST, so an overseas consignor
+ * defaults to "no" (marked as an intake default, editable). An Australian or
+ * unrecorded country stays unknown so a person is asked. Foreign VAT/GST
+ * registration is never inferred.
+ */
+export function australianGstAtIntake(
+  country: string | null | undefined,
+  answer: boolean | null | "auto" | undefined,
+): { registered: boolean | null; basis: ConsignorRow["australian_gst_basis"] } {
+  if (answer === true || answer === false) return { registered: answer, basis: "recorded" };
+  if (answer === null) return { registered: null, basis: null };
+  const c = country?.trim().toUpperCase();
+  if (c && c !== "AU") return { registered: false, basis: "intake_default_overseas" };
+  return { registered: null, basis: null };
+}
+
+export async function addConsignor(db: D1Database, c: ConsignorInput): Promise<number> {
+  const country = c.country?.trim().toUpperCase() || null;
+  const gst = australianGstAtIntake(country, c.australian_gst_registered ?? "auto");
   const r = await db
     .prepare(
-      `INSERT INTO consignors (name, contact, gst_registered, gst_status, abn, commission_type, commission_value, agreement_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      `INSERT INTO consignors (name, contact, country, australian_gst_registered, australian_gst_basis, abn,
+         commission_type, commission_value, agreement_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     )
     .bind(
-      c.name,
+      c.name.trim(),
       c.contact ?? null,
-      c.gst_registered ? 1 : 0,
-      c.gst_registered === null ? null : c.gst_registered ? "registered" : "not_registered",
+      country,
+      gst.registered === null ? null : gst.registered ? 1 : 0,
+      gst.basis,
       c.abn ?? null,
       c.commission_type ?? "percent",
       c.commission_value ?? 0,
-      c.agreement_type ?? "agency",
+      c.agreement_type ?? null,
     )
     .first<{ id: number }>();
   return r!.id;
