@@ -4,6 +4,11 @@
 //   npm run demo:sql
 //   npm run demo:load
 //
+// WARNING: the demo inserts MADE-UP stock facts, including for some real LOFI
+// SKUs. Don't load it into a database you'll also fetch real payouts into, or
+// those payouts get classified from invented facts. Remove it with
+// `npm run demo:unload`.
+//
 // It runs the real ingest path (normalise -> store sources -> classify ->
 // reconcile) over the test fixtures in an in-memory database, then dumps the
 // tables as INSERT statements. Three payouts are produced:

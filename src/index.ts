@@ -51,8 +51,8 @@ export interface Env {
   ALLOW_DATA_RESET?: string;
 }
 
-/** Max payouts processed per run, to stay inside Worker subrequest limits. */
-const MAX_PAYOUTS_PER_RUN = 6;
+/** Max payouts processed per platform per run, to stay inside Worker subrequest limits. */
+const MAX_PAYOUTS_PER_CHANNEL_PER_RUN = 6;
 
 interface Source {
   channel: Channel;
@@ -129,6 +129,7 @@ export async function run(env: Env, only?: { channel: string; payoutId: string }
   let processed = 0;
   for (const s of srcs) {
     if (only && only.channel !== s.channel) continue;
+    let done = 0;
     try {
       const list = await s.list(since);
       if (only && !list.some((p) => p.id === only.payoutId)) {
@@ -136,11 +137,13 @@ export async function run(env: Env, only?: { channel: string; payoutId: string }
       }
       for (const p of list) {
         if (only ? p.id !== only.payoutId : await reportExists(env.DB, s.channel, p.id)) continue;
-        if (processed >= MAX_PAYOUTS_PER_RUN) {
-          log.push("Run limit reached; remaining payouts will be picked up next run.");
-          return log;
+        // Each platform gets its own allowance, so one can't starve the other.
+        if (done >= MAX_PAYOUTS_PER_CHANNEL_PER_RUN) {
+          log.push(`${s.channel}: run limit reached; press Fetch again for the rest.`);
+          break;
         }
         const r = await ingestAndReport(env.DB, await p.load());
+        done++;
         processed++;
         log.push(`${s.channel} ${p.id}: ${r.status}, ${r.saleCount} sales, difference ${r.differenceCents} cents`);
       }

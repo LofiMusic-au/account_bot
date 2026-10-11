@@ -14,7 +14,8 @@
     "demo:sql": "mkdir -p .wrangler && vite-node scripts/demo-sql.ts > .wrangler/demo.sql",
     "demo:load": "wrangler d1 execute lofi-recon --local --file .wrangler/demo.sql",
     "live:validate": "vite-node scripts/live-validate.ts",
-    "ebay:consent": "vite-node scripts/ebay-consent.ts"
+    "ebay:consent": "vite-node scripts/ebay-consent.ts",
+    "demo:unload": "wrangler d1 execute lofi-recon --local --file scripts/demo-unload.sql"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
