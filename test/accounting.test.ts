@@ -190,3 +190,28 @@ describe("stage 2: the subledger in the database", () => {
     expect(ledger(sqlite)).toEqual([]);
   });
 });
+
+describe("consignment module stays in shadow mode", () => {
+  it("is labelled shadow mode, and no code marks entries posted or paid", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { CONSIGNMENT_MODULE_MODE } = await import("../src/accounting/consignment");
+    expect(CONSIGNMENT_MODULE_MODE).toBe("shadow");
+    const files = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e: import("node:fs").Dirent) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]));
+    const src = files(join(import.meta.dirname, "../src")).map((f) => readFileSync(f, "utf8")).join("\n");
+    expect(src).not.toMatch(/journal_status\s*=\s*'posted'|journal_status\s*=\s*"posted"|'paid'/);
+  });
+
+  it("the Consignments page says SHADOW MODE and calls its figures provisional", async () => {
+    const worker = (await import("../src/index")).default;
+    const { d1, sqlite } = makeTestD1();
+    seedFixtureFacts(sqlite);
+    await ingestAndReport(d1, shopifyFixture());
+    const html = await (await worker.fetch(new Request("http://local/consignments"), { DB: d1 } as never)).text();
+    expect(html).toContain("SHADOW MODE");
+    expect(html).toContain("Jess's manual consignment ledger is the source of truth");
+    expect(html).toContain("provisional");
+    expect(html).not.toMatch(/>Payable to consignors</);
+  });
+});

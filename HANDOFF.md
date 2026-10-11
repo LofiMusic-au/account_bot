@@ -159,6 +159,21 @@ This is how LOFI accounts for marketplace payouts today. The system reproduces i
   - totals are shown per month and consignor
 - **QuickBooks:** categories are logical codes, mapped to QuickBooks account IDs in milestone 2. Nothing is posted yet.
 
+**Consignment module status: SHADOW MODE.** Jess's manual consignment ledger stays the operational source of truth. The module in this repo is a prototype that runs alongside it, fed from the same normalised sales as the payout reconciler. Its figures are provisional and non-authoritative:
+- no real consignor payouts
+- no QuickBooks consignment or GST journals
+- no authoritative liability balances
+- no payment automation
+- no replacement of the spreadsheet workflow
+
+This phase exists to show the module can reproduce Jess's ledger over several real months before any cutover. The payout reconciler remains the primary build.
+
+**Known gap in the shadow ledger.** Jess's ledger works from a NET figure: sale, less postage, marketplace fees and repairs. It then splits that across several parties, for example 65/25/10, 65/25/5/5, 75/20/5 or 50/50. The shadow calculation currently applies a single LOFI commission to the item price. So it won't match Jess's ledger until these are modelled:
+- multi-party split rules
+- fee, postage and repair deductions (fees automatically, postage and repairs entered by hand at first)
+
+That is the next shadow-phase task. It stays shadow-only.
+
 **This baseline is LOFI's current operational treatment, not an accountant-approved one.** The draft GST scenarios in `src/rules/` and their sign-off remain authoritative for any change. Both run side by side. Each payout shows the historical split and the draft-scenario classification.
 
 **Design principles:**
@@ -249,6 +264,10 @@ From about 500 of the 2,927 Shopify variants (the newest 250 and the oldest 250)
 8. **After accountant sign-off:**
    - Flip `signedOff`, set `FEE_TAX` and the EIS treatment.
    - Implement the C4 FX policy: store the buyer-currency amount and the approved rate, and post the difference to FX Gain/Loss.
+8b. **Consignment shadow phase** (secondary, never operational until signed off):
+   - Model Jess's ledger: multi-party split rules, plus fee, postage and repair deductions to NET.
+   - Compare against several real months of Jess's ledger.
+   - No payouts, journals or authoritative balances.
 9. **Milestone 2: QBO posting.** The first target is to reproduce the historical baseline exactly: post the stage 1 split by logical category, and the stage 2 periodic consignment journal. Improve it only after accountant sign-off.
    - Intuit app (LOFI has one), OAuth.
    - Map `ACCOUNTS` and tax codes to the real QBO chart of accounts and AU tax codes.

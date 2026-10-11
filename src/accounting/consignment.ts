@@ -1,3 +1,11 @@
+// SHADOW MODE. This module is a prototype that runs alongside Jess's manual
+// consignment ledger, which remains the operational source of truth. Its
+// figures are provisional and non-authoritative: they must not be used for
+// real consignor payouts, QuickBooks journals or liability balances, and
+// nothing here marks an entry as posted or paid. Its purpose is to show it
+// can reproduce Jess's ledger before any cutover.
+export const CONSIGNMENT_MODULE_MODE = "shadow" as const;
+
 // Stage 2 of LOFI's historical method: the consignment subledger that used to
 // be a hand-kept spreadsheet. The same marketplace sale that the payout split
 // records as CONSIGNMENT_SALES_NO_GST appears here, with the consignor's rule

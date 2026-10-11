@@ -90,7 +90,7 @@ form.factform{display:flex;flex-wrap:wrap;gap:6px;align-items:center}form.factfo
 input.money{width:7em}input.pct{width:5em}details.prefix{flex-basis:100%}details.prefix summary{font-size:12px}
 label.inline{display:inline-flex;flex-direction:row;align-items:center;gap:6px;color:var(--fg)}
 </style></head><body>
-<header><b>LOFI payout reconciliation</b><a href="/">Payouts</a><a href="/review">Review queue</a><a href="/consignments">Consignments</a><a href="/stock/new">Add stock record</a>
+<header><b>LOFI payout reconciliation</b><a href="/">Payouts</a><a href="/review">Review queue</a><a href="/consignments">Consignments (shadow)</a><a href="/stock/new">Add stock record</a>
 <span class="muted" style="margin-left:auto">Report-only · nothing is posted to QuickBooks</span></header>
 <main>${body}</main></body></html>`;
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -333,7 +333,7 @@ function baselineSection(r: PayoutReport): string {
     })
     .join("");
   return `<h2>Historical baseline split</h2>
-<p class="muted small">How staff split this payout by hand: by ownership and destination only. Consignment sales go in full at no GST, and their commission is handled in the <a href="/consignments">consignment ledger</a>. This is LOFI's current method, <b>not</b> an accountant-approved treatment. ${b.complete ? `<span class="ready">Every line is categorised.</span>` : `<span class="review">${b.unclassifiedCount} line(s) not categorised yet.</span>`}</p>
+<p class="muted small">How staff split this payout by hand: by ownership and destination only. Consignment sales go in full at no GST, and their commission is handled in the consignment ledger. Jess's manual ledger is the source of truth for that; the <a href="/consignments">shadow ledger</a> here is a comparison only. This is LOFI's current method, <b>not</b> an accountant-approved treatment. ${b.complete ? `<span class="ready">Every line is categorised.</span>` : `<span class="review">${b.unclassifiedCount} line(s) not categorised yet.</span>`}</p>
 <div class="wrap"><table><tr><th>Category</th><th>Historical QuickBooks account</th><th class="n">Amount</th></tr>${rows}
 <tr class="total"><td>Total (equals the reconstructed payout)</td><td></td><td class="n">${fmt(b.sumCents)}</td></tr></table></div>`;
 }
@@ -367,14 +367,14 @@ export function renderConsignments(rows: ConsignmentRow[], period: string | unde
       ([p, ts]) => `<h2>${esc(p)}</h2>
 <div class="tiles">
 <div class="tile"><div class="muted">Consignment sales</div><div class="v">${fmt(sum(ts, "grossSaleCents"))}</div></div>
-<div class="tile"><div class="muted">LOFI commission income (ex GST)</div><div class="v">${fmt(sum(ts, "commissionExGstCents"))}</div></div>
-<div class="tile"><div class="muted">GST payable on commission</div><div class="v">${fmt(sum(ts, "commissionGstCents"))}</div></div>
-<div class="tile"><div class="muted">Payable to consignors</div><div class="v">${fmt(sum(ts, "consignorPayableCents"))}</div></div>
+<div class="tile"><div class="muted">Provisional LOFI commission (ex GST)</div><div class="v">${fmt(sum(ts, "commissionExGstCents"))}</div></div>
+<div class="tile"><div class="muted">Provisional GST on commission</div><div class="v">${fmt(sum(ts, "commissionGstCents"))}</div></div>
+<div class="tile"><div class="muted">Provisional consignor share</div><div class="v">${fmt(sum(ts, "consignorPayableCents"))}</div></div>
 </div>
-<p class="muted small">These are the three figures LOFI used to calculate in the spreadsheet and journal by hand for the period. Nothing is posted.${
+<p class="muted small">Shadow figures to compare with Jess's ledger for the period. Not for payouts or journals.${
         ts.some((t) => t.incomplete) ? ` <span class="review">${ts.reduce((a, t) => a + t.incomplete, 0)} entr${ts.reduce((a, t) => a + t.incomplete, 0) === 1 ? "y is" : "ies are"} incomplete and not included.</span>` : ""
       }</p>
-<div class="wrap"><table><tr><th>Consignor</th><th class="n">Entries</th><th class="n">Sales</th><th class="n">Commission</th><th class="n">GST on commission</th><th class="n">Payable to consignor</th></tr>
+<div class="wrap"><table><tr><th>Consignor</th><th class="n">Entries</th><th class="n">Sales</th><th class="n">Commission</th><th class="n">GST on commission</th><th class="n">Consignor share (provisional)</th></tr>
 ${ts
   .map(
     (t) => `<tr><td>${esc(t.consignorName ?? "No consignor recorded")}</td><td class="n">${t.entries}${t.incomplete ? ` <span class="review small">(${t.incomplete} incomplete)</span>` : ""}</td>
@@ -383,7 +383,7 @@ ${ts
   .join("")}</table></div>`,
     )
     .join("");
-  const detail = `<h2>Entries</h2><div class="wrap"><table><tr><th>Date</th><th>Order</th><th>SKU</th><th>Consignor</th><th>Rule</th><th class="n">Sale</th><th class="n">Commission</th><th class="n">GST</th><th class="n">Payable</th><th>Status</th></tr>
+  const detail = `<h2>Entries</h2><div class="wrap"><table><tr><th>Date</th><th>Order</th><th>SKU</th><th>Consignor</th><th>Rule</th><th class="n">Sale</th><th class="n">Commission</th><th class="n">GST</th><th class="n">Consignor share</th><th>Status</th></tr>
 ${rows
   .map(
     (r) => `<tr><td>${esc(r.sale_date)}${r.kind === "refund" ? ` ${chip("review", "refund")}` : ""}</td>
@@ -391,12 +391,13 @@ ${rows
 <td>${esc(r.consignor_name ?? "—")}</td><td class="small">${r.commission_type === "percent" ? `${r.commission_value}%` : r.commission_type === "fixed" ? `$${r.commission_value} each` : "—"}</td>
 <td class="n">${fmt(r.gross_sale_cents)}</td><td class="n">${r.commission_cents === null ? "" : fmt(r.commission_cents)}</td>
 <td class="n">${r.commission_gst_cents === null ? "" : fmt(r.commission_gst_cents)}</td><td class="n">${r.consignor_payable_cents === null ? "" : fmt(r.consignor_payable_cents)}</td>
-<td>${r.status === "calculated" ? chip("approved", r.journal_status) : `${chip("review", "incomplete")}<div class="small muted">${esc(r.problem ?? "")}</div>`}</td></tr>`,
+<td>${r.status === "calculated" ? chip("draft", "provisional") : `${chip("review", "incomplete")}<div class="small muted">${esc(r.problem ?? "")}</div>`}</td></tr>`,
   )
   .join("")}
 ${rows.length === 0 ? `<tr><td colspan="10" class="muted">No consignment sales yet. They appear here automatically when a payout includes a consigned item.</td></tr>` : ""}</table></div>`;
-  const body = `<h1>Consignment ledger</h1>
-<p class="muted">Replaces the consignment spreadsheet. Every consigned item in a payout appears here automatically. Each consignor's rule is applied: commission = rule × sale price after discounts, excluding shipping. GST on commission is 1/11 of the commission, and the consignor is paid the rest. The payout split records the full sale as <b>CONSIGNMENT_SALES_NO_GST</b>, and this ledger supplies the commission figures for the period's journal. ${esc(HISTORICAL_BASELINE.label)}.</p>
+  const body = `<h1>Consignment ledger <span class="chip draft">SHADOW MODE</span></h1>
+<div class="banner"><b>Consignment module — shadow mode.</b> Jess's manual consignment ledger is the source of truth. Everything on this page is provisional and non-authoritative. Don't use it for consignor payouts, GST journals or liability balances. It runs alongside so its results can be compared with Jess's ledger before any switch-over.</div>
+<p class="muted">A draft of the consignment spreadsheet, filled from the same sales as the payout reconciler. Every consigned item in a payout appears here automatically. Each consignor's rule is applied: commission = rule × sale price after discounts, excluding shipping. GST on commission is 1/11 of the commission, and the consignor is paid the rest. The payout split records the full sale as <b>CONSIGNMENT_SALES_NO_GST</b>, and this ledger supplies the commission figures for the period's journal. ${esc(HISTORICAL_BASELINE.label)}.</p>
 ${periodLinks}${periodBlocks}${detail}`;
   return page("Consignments", body);
 }
