@@ -13,6 +13,9 @@ SHOPIFY_CLIENT_SECRET=
 # eBay developer app + user refresh token: sell.finances, sell.fulfillment.readonly
 EBAY_CLIENT_ID=
 EBAY_CLIENT_SECRET=
+# RuName: developer portal > User Tokens > "Get a Token from eBay via Your Application"
+EBAY_RUNAME=
+# Filled in for you by `npm run ebay:consent`:
 EBAY_REFRESH_TOKEN=
 # Optional instead of the three above, for one-off validation runs only:
 # EBAY_ACCESS_TOKEN=
