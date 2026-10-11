@@ -12,14 +12,14 @@ database_name = "lofi-recon"
 database_id = "REPLACE_WITH_D1_DATABASE_ID"   # wrangler d1 create lofi-recon
 
 [vars]
-SHOPIFY_SHOP = "REPLACE.myshopify.com"
-SHOPIFY_API_VERSION = "2025-10"
+SHOPIFY_SHOP = "lofi-music.myshopify.com"
+SHOPIFY_API_VERSION = "2026-10"   # pinned; review each quarter (Shopify supports a version for at least 12 months)
 EBAY_MARKETPLACE_ID = "EBAY_AU"
 # Days of payouts to look back on each run.
 LOOKBACK_DAYS = "14"
 
 # Secrets (set with `wrangler secret put <NAME>`):
-#   SHOPIFY_ADMIN_TOKEN   custom app token: read_orders, read_shopify_payments_payouts (read_shopify_payments)
+#   SHOPIFY_ADMIN_TOKEN   custom app token: read_orders + read_shopify_payments (or read_shopify_payments_payouts / _accounts)
 #   EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_REFRESH_TOKEN
 #                         scopes: sell.finances, sell.fulfillment.readonly
 #   DASHBOARD_TOKEN       shared secret for the dashboard (or put the Worker behind Cloudflare Access)

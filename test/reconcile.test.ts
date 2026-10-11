@@ -205,6 +205,22 @@ describe("Shopify fixture payout", () => {
     expect(r.status).toBe("needs_review");
   });
 
+  it("CURRENCY_CONVERSION (new in API 2026-10) is surfaced as unsupported, not ignored", () => {
+    const p = shopifyFixture((f) => {
+      f.transactions.push({
+        ...f.transactions[5]!,
+        id: "gid://shopify/ShopifyPaymentsBalanceTransaction/9",
+        type: "CURRENCY_CONVERSION",
+        amount: { amount: "-1.25", currencyCode: "AUD" },
+        net: { amount: "-1.25", currencyCode: "AUD" },
+      });
+      f.payout.net.amount = "1724.91";
+    });
+    const r = buildReport(p, resolve, now);
+    expect(r.differenceCents).toBe(0);
+    expect(r.issues.find((i) => i.code === "unsupported_transaction_type")!.message).toMatch(/CURRENCY_CONVERSION/);
+  });
+
   it("an order without a shipping address has an unknown destination", () => {
     const r = buildReport(shopifyFixture((f) => void (f.orders[1]!.shippingAddress = null)), resolve, now);
     expect(r.issues.find((i) => i.code === "unknown_destination")).toMatchObject({ orderId: "gid://shopify/Order/3260" });

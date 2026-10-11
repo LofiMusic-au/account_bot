@@ -110,6 +110,8 @@ const ORDERS_QUERY = `query Orders($ids: [ID!]!) {
 }`;
 
 export class ShopifyClient {
+  /** Deprecations Shopify reported for our queries (X-Shopify-API-Deprecated-Reason). */
+  readonly deprecations = new Set<string>();
   constructor(private cfg: ShopifyConfig) {}
 
   async gql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
@@ -125,6 +127,8 @@ export class ShopifyClient {
         continue;
       }
       if (!res.ok) throw new Error(`Shopify ${res.status}: ${await res.text()}`);
+      const deprecated = res.headers.get("X-Shopify-API-Deprecated-Reason");
+      if (deprecated) this.deprecations.add(deprecated);
       const body = (await res.json()) as { data?: T; errors?: { message: string; extensions?: { code?: string } }[] };
       if (body.errors?.some((e) => e.extensions?.code === "THROTTLED") && attempt < 4) {
         await sleep(1000 * 2 ** attempt);
@@ -176,7 +180,9 @@ export class ShopifyClient {
     const txns = await this.payoutTransactions(p.legacyResourceId);
     const orderIds = [...new Set(txns.map((t) => t.associatedOrder?.id).filter((x): x is string => !!x))];
     const orders = await this.orders(orderIds);
-    return normaliseShopifyPayout(p, txns, orders);
+    const payout = normaliseShopifyPayout(p, txns, orders);
+    for (const d of this.deprecations) payout.warnings.push(`Shopify API ${this.cfg.apiVersion} reports a deprecation used by this app: ${d}`);
+    return payout;
   }
 }
 
@@ -189,7 +195,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Shopify Payments balance transaction types this code understands, from the
- * ShopifyPaymentsTransactionType enum (Admin API 2025-10). Anything else is
+ * ShopifyPaymentsTransactionType enum (checked for API 2026-10). 2026-10 added
+ * CURRENCY_CONVERSION; it is deliberately left unsupported (blocking) until a
+ * live example shows how it should be read. Anything else is
  * counted in the total but blocks the payout as unsupported.
  */
 const FEE_TYPES: Record<string, { type: string; category: FeeCategory }> = {
