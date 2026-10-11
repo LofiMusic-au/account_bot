@@ -114,3 +114,10 @@ export function convertAtRate(cents: number, rate: string): number {
   if (!Number.isSafeInteger(cents * num)) throw new Error(`Conversion out of range: ${cents} x ${rate}`);
   return divRound(cents * num, den);
 }
+
+/** Cents as a plain decimal string for CSV: -123456 -> "-1234.56". */
+export function centsToDecimal(cents: number): string {
+  const sign = cents < 0 ? "-" : "";
+  const abs = Math.abs(cents);
+  return `${sign}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, "0")}`;
+}

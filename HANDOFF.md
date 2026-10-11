@@ -150,6 +150,8 @@ Fetch is limited to 6 payouts per platform per click. `ALLOW_DATA_RESET=true`, l
   - an unknown destination can be referred for manual review (`order_facts.referred`, which raises a `destination_referred` issue in the accountant group)
 - **Live Shopify validation with orders:** four payouts reconcile, charges equal order totals, and the refund matches its order. See `docs/live-validation-2026-10.md`.
 
+**Next checkpoint: historical baseline comparison.** Use `docs/baseline-comparison.md` and each payout's "Download this split as CSV". Compare 5–10 payouts staff already split in QuickBooks, and log every mismatch by type: stock fact, rule, source mapping, historical inconsistency, or accountant decision. Milestone 2, a QuickBooks dry run into clearing accounts, starts after that.
+
 ### 4d. Historical accounting baseline (Oct 2026)
 
 This is how LOFI accounts for marketplace payouts today. The system reproduces it first, and improves on it only after the accountant signs off.
@@ -214,7 +216,7 @@ This phase exists to show the module can reproduce Jess's ledger over several re
 - **Fees on a multi-item order:** shared across its lines in proportion to the amounts. Shipping labels count as postage, not fees.
 - **Refunds:** reverse the split, including fixed amounts. Manual costs aren't applied to refund rows.
 - **Shipping on a mixed order:** shared across its item categories in proportion. The historical method didn't split shipping.
-- **eBay International Shipping:** split as overseas. C2 is still unresolved in the draft scenarios.
+- **eBay International Shipping:** split as overseas, no GST (rule R5). LOFI confirmed this is the historical treatment on 11 Oct 2026. The draft GST scenario C2 still awaits the accountant.
 - **Consignor active dates and rule versions:** stored only. Rules aren't versioned over time yet. An item can override its consignor's rule (`stock_items.settlement_rule_id`), but there's no UI for that yet.
 - **`LC-`:** whether it means LOFI-owned is unknown, so only `L-` is treated as owned.
 

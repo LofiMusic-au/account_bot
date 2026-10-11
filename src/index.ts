@@ -46,6 +46,7 @@ import {
 } from "./db";
 import { toCents } from "./money";
 import { consignmentEntries, type BasTreatment, type PartyRole } from "./accounting/consignment";
+import { splitCsv } from "./accounting/baseline";
 import { buildReport, type PayoutReport } from "./reconcile";
 import type { Channel, Issue, NormalisedPayout } from "./types";
 import { renderConsignments, renderRules, renderIndex, renderReport, renderReview, renderStockForm, type ConsignorOption, type ReviewItem } from "./ui";
@@ -344,7 +345,7 @@ export default {
       return redirect(withMsg("/", log.join(" · ")));
     }
 
-    const m = /^\/payout\/(ebay|shopify)\/([^/]+)(?:\/(rerun|refetch|rebuild))?$/.exec(path);
+    const m = /^\/payout\/(ebay|shopify)\/([^/]+)(?:\/(rerun|refetch|rebuild|split\.csv))?$/.exec(path);
     if (m) {
       const [, channel, rawId, action] = m;
       const payoutId = decodeURIComponent(rawId!);
@@ -356,6 +357,16 @@ export default {
       if (req.method === "POST" && (action === "rerun" || action === "refetch")) {
         const log = await run(env, { channel: channel!, payoutId });
         return redirect(withMsg(back, log.join(" · ")));
+      }
+      if (req.method === "GET" && action === "split.csv") {
+        const r = await getReport(env.DB, channel!, payoutId);
+        if (!r?.baseline) return new Response("Payout not found", { status: 404 });
+        return new Response(splitCsv(r, r.baseline), {
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": `attachment; filename="split-${channel}-${payoutId.replace(/[^A-Za-z0-9_-]/g, "")}.csv"`,
+          },
+        });
       }
       if (req.method !== "GET" || action) return new Response("Not found", { status: 404 });
       const r = await getReport(env.DB, channel!, payoutId);

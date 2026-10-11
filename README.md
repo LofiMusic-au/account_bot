@@ -142,6 +142,9 @@ npm run typecheck    # src (Workers types) and test (Node types)
 
 ## Before trusting the numbers
 
+**Compare against real bookkeeping first.** See `docs/baseline-comparison.md`. Download each payout's split as CSV and compare it line by line with the QuickBooks split staff made. Log every mismatch by type.
+
+
 1. **Run against real payouts and compare with how they were entered by hand.**
    - Five live eBay payouts reconcile to the cent. See `docs/live-validation-2026-10.md`.
    - eBay order details still need a token with Fulfillment access.

@@ -34,7 +34,8 @@ describe("the payout classification rules table", () => {
       ["R3", "CONSIGNMENT_SALES_NO_GST"],
       ["R4", "UNCLASSIFIED"],
       ["R5", "SALES_OVERSEAS_NO_GST"],
-      ["R6", "SALES_DOMESTIC_GST"],
+      ["R6", "SALES_OVERSEAS_NO_GST"],
+      ["R7", "SALES_DOMESTIC_GST"],
     ]);
   });
 
@@ -46,9 +47,11 @@ describe("the payout classification rules table", () => {
     expect(cat(order({ destinationCountry: null, shippingProgram: "unknown" }), consigned).ruleId).toBe("R3");
     expect(cat(order({ destinationCountry: null, shippingProgram: "unknown" }), owned).ruleId).toBe("R4");
     expect(cat(order({ destinationCountry: null, shippingProgram: "unknown", destinationReferred: true }), owned).ruleId).toBe("R4");
-    expect(cat(order({ destinationCountry: "NZ", shippingProgram: "direct_export" }), owned).ruleId).toBe("R5");
-    expect(cat(order({ destinationCountry: "DE", shippingProgram: "ebay_international" }), owned).reason).toMatch(/C2 still unresolved/);
-    expect(cat(order(), owned)).toMatchObject({ ruleId: "R6", category: "SALES_DOMESTIC_GST" });
+    expect(cat(order({ destinationCountry: "NZ", shippingProgram: "direct_export" }), owned)).toMatchObject({ ruleId: "R6", category: "SALES_OVERSEAS_NO_GST" });
+    // eBay International Shipping has its own row (confirmed historical treatment), not the direct-export row.
+    expect(cat(order({ destinationCountry: "DE", shippingProgram: "ebay_international" }), owned)).toMatchObject({ ruleId: "R5", category: "SALES_OVERSEAS_NO_GST" });
+    expect(cat(order({ destinationCountry: "DE", shippingProgram: "ebay_international" }), consigned).ruleId).toBe("R3");
+    expect(cat(order(), owned)).toMatchObject({ ruleId: "R7", category: "SALES_DOMESTIC_GST" });
   });
 
   it("every combination of facts matches some row", () => {
@@ -92,7 +95,7 @@ describe("Division 66 status: only assessed when acquisition facts exist", () =>
 
   it("an L- item with no acquisition facts is Sales - GST but Division 66 not assessed", () => {
     const split = baselineSplit(shopifyFixture(), makeResolver([], [], []));
-    expect(split.lines.find((l) => l.sku === "L-DISC-1")).toMatchObject({ category: "SALES_DOMESTIC_GST", ruleId: "R6", division66: "not_assessed" });
+    expect(split.lines.find((l) => l.sku === "L-DISC-1")).toMatchObject({ category: "SALES_DOMESTIC_GST", ruleId: "R7", division66: "not_assessed" });
   });
 });
 
@@ -149,7 +152,45 @@ describe("review-queue facts", () => {
   it("the Rules page lists the table", async () => {
     const { d1 } = makeTestD1();
     const html = await (await worker.fetch(new Request("http://local/rules"), env(d1))).text();
-    for (const id of ["R1", "R2", "R3", "R4", "R5", "R6"]) expect(html).toContain(`<b>${id}</b>`);
+    for (const id of ["R1", "R2", "R3", "R4", "R5", "R6", "R7"]) expect(html).toContain(`<b>${id}</b>`);
     expect(html).toContain("Overseas Sales - No GST");
+  });
+});
+
+describe("eBay International Shipping", () => {
+  const eis = () =>
+    ebayFixture((f) => {
+      f.orders[1]!.program = { ebayInternationalShipping: {} };
+      f.orders[1]!.fulfillmentStartInstructions = [{ ebaySupportedFulfillment: true, finalDestinationAddress: { countryCode: "DE" } }];
+    });
+  const resolve = () =>
+    makeResolver([{ sku: "L-NZ-1", title: null, ownership: "owned", acquired_from: "registered_supplier", purchase_cents: null, purchase_date: null, seller_name: null, seller_address: null, seller_description: null, consignor_id: null, commission_type: null, commission_value: null, override_scenario: null }], [], []);
+
+  it("historical split: overseas, no GST, under its own rule R5", () => {
+    const lines = baselineSplit(eis(), resolve()).lines.filter((l) => l.orderId === "26-00002-00002" && l.kind !== "fee");
+    expect(lines.every((l) => l.category === "SALES_OVERSEAS_NO_GST")).toBe(true);
+    expect(lines.find((l) => l.kind === "item")!.ruleId).toBe("R5");
+  });
+
+  it("the draft GST scenario C2 is still held for the accountant, separately", async () => {
+    const { buildReport } = await import("../src/reconcile");
+    const r = buildReport(eis(), resolve());
+    expect(r.sales.find((l) => l.sku === "L-NZ-1")).toMatchObject({ scenario: "C2", approval: "review" });
+  });
+});
+
+describe("split CSV export", () => {
+  it("lists every line, totals by category and the payout, with plain decimals", async () => {
+    const { d1, sqlite } = makeTestD1();
+    seedFixtureFacts(sqlite);
+    await ingestAndReport(d1, shopifyFixture());
+    const res = await worker.fetch(new Request("http://local/payout/shopify/9001/split.csv"), { DB: d1 } as unknown as Env);
+    expect(res.headers.get("Content-Type")).toMatch(/text\/csv/);
+    const csv = await res.text();
+    const rows = csv.trim().split("\n");
+    expect(rows[0]).toBe("section,payout,payout_date,category,historical_account,kind,order,sku,rule,division66,reverses,amount,source_transaction,reason");
+    expect(rows.some((r) => r.startsWith("line,Shopify 9001,2026-10-08,CONSIGNMENT_SALES_NO_GST") && r.includes(",854.05,"))).toBe(true);
+    expect(rows.some((r) => r.startsWith("total,Shopify 9001,2026-10-08,SHOPIFY_FEES") && r.includes(",-76.84,"))).toBe(true);
+    expect(rows.at(-1)).toMatch(/^payout,Shopify 9001,2026-10-08,.*,1726\.16,,actual payout 1726\.16$/);
   });
 });

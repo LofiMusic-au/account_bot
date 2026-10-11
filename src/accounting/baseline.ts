@@ -2,7 +2,8 @@
 // give each a logical category, the way staff did by hand in QuickBooks.
 //
 //   LOFI-owned, Australia      -> SALES_DOMESTIC_GST
-//   LOFI-owned, overseas       -> SALES_OVERSEAS_NO_GST
+//   LOFI-owned, LOFI exports   -> SALES_OVERSEAS_NO_GST
+//   LOFI-owned, eBay Intl Ship -> SALES_OVERSEAS_NO_GST (confirmed historical treatment)
 //   Consignment (anywhere)     -> CONSIGNMENT_SALES_NO_GST  (+ consignment ledger)
 //   eBay / Shopify fees        -> EBAY_FEES / SHOPIFY_FEES
 //   Adjustments                -> MARKETPLACE_ADJUSTMENTS
@@ -14,10 +15,10 @@
 // is reported separately. A balanced payout is necessary but not sufficient
 // for accounting correctness.
 
-import { allocate } from "../money";
+import { allocate, centsToDecimal } from "../money";
 import { isDivision66Candidate, rescaleOrder, type StockResolver } from "../rules/engine";
 import type { FeeCategory, NormalisedPayout, OrderSale, SaleLine, StockItem } from "../types";
-import { HISTORICAL_BASELINE, type LogicalCategory } from "./categories";
+import { CATEGORIES, HISTORICAL_BASELINE, type LogicalCategory } from "./categories";
 
 export interface BaselineLine {
   category: LogicalCategory;
@@ -73,8 +74,18 @@ export const PAYOUT_CLASSIFICATION_RULES: readonly ClassificationRule[] = [
   { id: "R2", when: "Ownership unknown (no stock record, no prefix rule, not L-)", test: (f) => f.ownership === null, category: "UNCLASSIFIED" },
   { id: "R3", when: "Consignment, any destination", test: (f) => f.ownership === "consignment", category: "CONSIGNMENT_SALES_NO_GST" },
   { id: "R4", when: "LOFI-owned, destination unknown or referred for review", test: (f) => f.destination === "unknown" || f.destination === "referred", category: "UNCLASSIFIED" },
-  { id: "R5", when: "LOFI-owned, sent overseas (including eBay International Shipping)", test: (f) => f.destination === "overseas", category: "SALES_OVERSEAS_NO_GST" },
-  { id: "R6", when: "LOFI-owned, sold in Australia", test: (f) => f.destination === "AU", category: "SALES_DOMESTIC_GST" },
+  {
+    // Confirmed by LOFI (11 Oct 2026): staff have always split eBay
+    // International Shipping sales as overseas, no GST. Kept as its own row so
+    // these sales stay traceable; the draft GST scenario C2 still awaits the
+    // accountant, independently of this baseline.
+    id: "R5",
+    when: "LOFI-owned, sold through eBay International Shipping (overseas, no GST: LOFI's confirmed historical treatment)",
+    test: (f) => f.ebayInternationalShipping,
+    category: "SALES_OVERSEAS_NO_GST",
+  },
+  { id: "R6", when: "LOFI-owned, LOFI ships it overseas itself", test: (f) => f.destination === "overseas", category: "SALES_OVERSEAS_NO_GST" },
+  { id: "R7", when: "LOFI-owned, sold in Australia", test: (f) => f.destination === "AU", category: "SALES_DOMESTIC_GST" },
 ];
 
 /** Fee categories by channel. Configured, not inferred. */
@@ -114,8 +125,7 @@ export function itemCategory(order: OrderSale, line: SaleLine, resolve: StockRes
   const item = line.placeholder ? null : resolve(line.sku);
   const f = lineFacts(order, line, item);
   const rule = PAYOUT_CLASSIFICATION_RULES.find((r) => r.test(f))!;
-  const extra = f.ebayInternationalShipping && rule.id === "R5" ? " (C2 still unresolved in the draft scenarios)" : "";
-  return { category: rule.category, reason: `${rule.id}: ${rule.when}${extra}`, ruleId: rule.id };
+  return { category: rule.category, reason: `${rule.id}: ${rule.when}`, ruleId: rule.id };
 }
 
 /**
@@ -212,4 +222,42 @@ export function baselineSplit(payout: NormalisedPayout, resolve: StockResolver):
     unclassifiedCount,
     complete: unclassifiedCount === 0,
   };
+}
+
+const csvCell = (v: unknown) => {
+  const t = String(v ?? "");
+  return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+};
+
+/**
+ * The split as CSV, one row per payout line plus totals by category and a
+ * grand total, for laying beside the manual QuickBooks split of the same
+ * payout. Amounts are signed decimals as they affect the payout.
+ */
+export function splitCsv(meta: { channel: string; payoutId: string; payoutDate: string; netCents: number }, split: BaselineSplit): string {
+  const head = ["section", "payout", "payout_date", "category", "historical_account", "kind", "order", "sku", "rule", "division66", "reverses", "amount", "source_transaction", "reason"];
+  const rows: unknown[][] = [head];
+  const base = [meta.channel === "ebay" ? `eBay ${meta.payoutId}` : `Shopify ${meta.payoutId}`, meta.payoutDate];
+  for (const l of split.lines) {
+    rows.push([
+      "line",
+      ...base,
+      l.category,
+      CATEGORIES[l.category].historicalAccount ?? "",
+      l.kind,
+      l.orderName ?? l.orderId ?? "",
+      l.sku ?? "",
+      l.ruleId ?? "",
+      l.division66 ?? "",
+      l.reversesCategory ?? "",
+      centsToDecimal(l.cents),
+      l.sourceTransactionId ?? "",
+      l.reason,
+    ]);
+  }
+  for (const [c, cents] of Object.entries(split.totals)) {
+    rows.push(["total", ...base, c, CATEGORIES[c as LogicalCategory].historicalAccount ?? "", "", "", "", "", "", "", centsToDecimal(cents!), "", ""]);
+  }
+  rows.push(["payout", ...base, "", "", "", "", "", "", "", "", centsToDecimal(split.sumCents), "", `actual payout ${centsToDecimal(meta.netCents)}`]);
+  return rows.map((r) => r.map(csvCell).join(",")).join("\n") + "\n";
 }

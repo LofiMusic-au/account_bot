@@ -339,7 +339,8 @@ function baselineSection(r: PayoutReport): string {
   return `<h2>Historical baseline split</h2>
 <p class="muted small">How staff split this payout by hand: by ownership and destination only (<a href="/rules">the rules</a>). Consignment sales go in full at no GST, and their commission is handled in the consignment ledger. Jess's manual ledger is the source of truth for that; the <a href="/consignments">shadow ledger</a> here is a comparison only. This is LOFI's current method, <b>not</b> an accountant-approved treatment. ${b.complete ? `<span class="ready">Every line is categorised.</span>` : `<span class="review">${b.unclassifiedCount} line(s) not categorised yet.</span>`}</p>
 <div class="wrap"><table><tr><th>Category</th><th>Historical QuickBooks account</th><th class="n">Amount</th></tr>${rows}
-<tr class="total"><td>Total (equals the reconstructed payout)</td><td></td><td class="n">${fmt(b.sumCents)}</td></tr></table></div>`;
+<tr class="total"><td>Total (equals the reconstructed payout)</td><td></td><td class="n">${fmt(b.sumCents)}</td></tr></table></div>
+<p class="small"><a href="${payoutLink(r.channel, r.payoutId)}/split.csv">Download this split as CSV</a> <span class="muted">to compare line by line with how the payout was split in QuickBooks.</span></p>`;
 }
 
 export function renderRules(): Response {
