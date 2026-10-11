@@ -33,12 +33,17 @@ function readVars(): Record<string, string> {
   return out;
 }
 
-/** Set KEY=value in .dev.vars, replacing an existing (or commented-out) line. */
+/**
+ * Set KEY="value" in .dev.vars, replacing an existing (or commented-out) line.
+ * Always quoted: eBay refresh tokens contain "#", which Wrangler's .env-style
+ * parser treats as the start of a comment when the value is unquoted.
+ */
 function writeVar(key: string, value: string) {
   const lines = existsSync(varsPath) ? readFileSync(varsPath, "utf8").split("\n") : [];
   const i = lines.findIndex((l) => new RegExp(`^\\s*#?\\s*${key}\\s*=`).test(l));
-  if (i >= 0) lines[i] = `${key}=${value}`;
-  else lines.push(`${key}=${value}`);
+  const line = `${key}="${value}"`;
+  if (i >= 0) lines[i] = line;
+  else lines.push(line);
   writeFileSync(varsPath, lines.join("\n").replace(/\n*$/, "\n"));
 }
 
