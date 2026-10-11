@@ -71,7 +71,7 @@ describe("staff correct facts, not tax codes", () => {
     expect(r.issues.filter((i) => i.severity === "blocking")).toEqual([]);
     expect(r.issues.filter((i) => i.severity === "deferred").map((i) => i.code)).toEqual(["unknown_acquisition_source"]);
     expect(r.status).toBe("ready");
-    expect(r.sales.find((l) => l.sku === "L-DISC-1")!.explanation[0]).toBe('SKU convention "L-" = LOFI-owned (no individual record)');
+    expect(r.sales.find((l) => l.sku === "L-DISC-1")!.explanation[0]).toBe('SKU convention sku_rule:L_PREFIX ("L…") = LOFI-owned (ownership only, no individual record)');
   });
 
   it("unknown non-L SKU -> ownership -> ready", async () => {

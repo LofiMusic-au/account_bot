@@ -1,6 +1,7 @@
 // D1 access: stock/consignor facts, source provenance, and payout reports.
 
 import { saleScenarioCounts, type PayoutReport } from "./reconcile";
+import { skuOwnershipRule } from "./rules/sku-ownership";
 import {
   costKey,
   validateRule,
@@ -74,15 +75,15 @@ const toConsignor = (r: ConsignorRow): Consignor => ({
   settlementRuleId: r.settlement_rule_id ?? null,
 });
 
-/**
- * LOFI's SKU convention: "L-" SKUs are LOFI-owned stock. It sets ownership
- * only. Acquisition source, condition and price must still be recorded, so
- * the GST scenario is never derived from the prefix alone. "LC-" and other
- * L-letter prefixes are not covered (their meaning isn't confirmed).
- */
-export const OWNED_SKU_CONVENTION = /^L-/i;
+/** Ownership from LOFI's built-in SKU conventions (src/rules/sku-ownership.ts), or undefined. */
+export const conventionOwnership = (sku: string): Ownership | undefined => skuOwnershipRule(sku)?.ownership;
 
-/** Pure resolver over preloaded rows: an item's own record beats the longest matching prefix, which beats the L- convention. */
+/**
+ * Pure resolver over preloaded rows. Precedence: the item's own record, then
+ * the longest staff-created prefix rule, then LOFI's built-in SKU ownership
+ * conventions (ownership only), else null (review). Listing links are applied
+ * before this, so a linked listing resolves through the same order.
+ */
 export function makeResolver(items: StockRow[], prefixes: PrefixRow[], consignors: ConsignorRow[]): StockResolver {
   const bySku = new Map(items.map((i) => [i.sku.trim().toUpperCase(), i]));
   const byId = new Map(consignors.map((c) => [c.id, toConsignor(c)]));
@@ -114,8 +115,10 @@ export function makeResolver(items: StockRow[], prefixes: PrefixRow[], consignor
     }
     const p = sortedPrefixes.find((x) => sku.trim().toUpperCase().startsWith(x.prefix.toUpperCase()));
     if (!p) {
-      if (!OWNED_SKU_CONVENTION.test(sku.trim())) return null;
-      return { sku, ownership: "owned", acquiredFrom: null, condition: null, purchaseCents: null, source: "convention", prefix: "L-" } satisfies StockItem;
+      const rule = skuOwnershipRule(sku);
+      if (!rule) return null;
+      // Ownership only: no source, condition, price or consignor.
+      return { sku, ownership: rule.ownership, acquiredFrom: null, condition: null, purchaseCents: null, consignor: null, source: "convention", prefix: rule.prefix, ruleId: rule.id } satisfies StockItem;
     }
     return {
       sku,
@@ -787,7 +790,7 @@ export async function setStockFact(db: D1Database, sku: string, field: FactField
   if (!existing) {
     const prefixes = (await db.prepare("SELECT * FROM sku_prefix_rules").all<PrefixRow>()).results.sort((a, b) => b.prefix.length - a.prefix.length);
     const p = prefixes.find((x) => s.toUpperCase().startsWith(x.prefix.toUpperCase()));
-    const ownership = field === "ownership" ? value : (p?.ownership ?? (OWNED_SKU_CONVENTION.test(s) ? "owned" : undefined));
+    const ownership = field === "ownership" ? value : (p?.ownership ?? conventionOwnership(s));
     if (!ownership) throw new Error(`Record whether ${s} is LOFI-owned or consignment first`);
     await db
       .prepare(
@@ -852,7 +855,7 @@ export async function saveStockFacts(db: D1Database, sku: string, f: StockFacts,
   if (!existing) {
     const prefixes = (await db.prepare("SELECT * FROM sku_prefix_rules").all<PrefixRow>()).results.sort((a, b) => b.prefix.length - a.prefix.length);
     const p = prefixes.find((x) => s.toUpperCase().startsWith(x.prefix.toUpperCase()));
-    const ownership = f.ownership ?? p?.ownership ?? (OWNED_SKU_CONVENTION.test(s) ? "owned" : undefined);
+    const ownership = f.ownership ?? p?.ownership ?? conventionOwnership(s);
     if (!ownership) throw new Error(`Record whether ${s} is LOFI-owned or consignment first`);
     await db
       .prepare(

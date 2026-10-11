@@ -134,6 +134,26 @@ The review queue is now a fact-correction console:
 
 Fetch is limited to 6 payouts per platform per click. `ALLOW_DATA_RESET=true`, local only, shows "Clear all payouts". `npm run demo:unload` removes the demo's made-up facts.
 
+### 4g. SKU ownership conventions (Oct 2026)
+
+`src/rules/sku-ownership.ts` sets ownership only (case-insensitive, first match wins):
+- **LOFI-owned:** `L`
+- **Consignment:** `M_C`, `A_C`, `insdot`, `INS`, `audot`, `AUD`, `RM`, `TT`, `P`, `G`, `BOX`, `OWN-BOX`, `OWNBOX`
+
+**Precedence:**
+1. the item's stock record
+2. a listing-to-SKU link (applied first)
+3. a staff prefix rule
+4. the conventions above
+5. otherwise review
+
+**Limits:**
+- The conventions never set the source, condition, price or consignor.
+- A consignment SKU still needs its consignor (rule R3 until it's recorded).
+- Individual SKU answers belong in stock records, not this table.
+
+Every rule is pinned in `test/sku-ownership.test.ts`.
+
 ### 4f. Milestone 2: QuickBooks posting, dry run (Oct 2026)
 
 Built and tested against a fake QuickBooks. It's dry-run by default, and no QuickBooks write has ever been made. See `docs/milestone2-posting.md`.

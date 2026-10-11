@@ -276,8 +276,10 @@ export interface StockItem {
   settlementRuleId?: number | null;
   /** Where the record came from: its own row, a SKU prefix rule, or LOFI's built-in SKU convention. */
   source: "item" | "prefix" | "convention";
-  /** The prefix that matched, when source = prefix. */
+  /** The prefix that matched, when source = prefix or convention. */
   prefix?: string;
+  /** The built-in ownership rule that matched, e.g. "sku_rule:L_PREFIX" (source = convention). */
+  ruleId?: string;
   /** Division 66 record complete (seller name/address/description/date/price). */
   div66RecordComplete?: boolean;
 }

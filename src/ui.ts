@@ -6,6 +6,7 @@ import type { ReportSummary, SourceInfo } from "./db";
 import type { Channel, FeeCategory, Issue, LineClassification, SourceRef } from "./types";
 import { CATEGORIES, HISTORICAL_BASELINE, type LogicalCategory } from "./accounting/categories";
 import { FEE_CATEGORY_MAP, PAYOUT_CLASSIFICATION_RULES } from "./accounting/baseline";
+import { SKU_OWNERSHIP_RULES, skuOwnershipRule } from "./rules/sku-ownership";
 import { ACCOUNT_DEFS, TAX_CODES } from "./posting/accounts";
 import type { QboMode } from "./posting/gateway";
 import type { JournalPreview } from "./posting/journal";
@@ -467,11 +468,16 @@ function baselineSection(r: PayoutReport): string {
 export function renderRules(): Response {
   const body = `<h1>Payout classification rules</h1>
 <p class="muted">How every payout line is categorised under the historical baseline, which is LOFI's current manual method and not accountant-approved. The rules are checked in order and the first match wins. A line that matches nothing certain stays <b>UNCLASSIFIED</b> and its missing fact goes to the review queue. Nothing is guessed.</p>
+<h2>Ownership from SKU conventions</h2>
+<p class="muted small">Used only when an item has no stock record of its own and no staff prefix rule. Ownership only: never the source, condition, price or consignor. Matching is case-insensitive, and the first match wins.</p>
+<div class="wrap"><table><tr><th>SKU starts with</th><th>Ownership</th><th>Rule</th></tr>
+${SKU_OWNERSHIP_RULES.map((r) => `<tr><td><code>${esc(r.prefix)}</code></td><td>${r.ownership === "owned" ? "LOFI-owned" : "Consignment"}</td><td class="small"><code>${esc(r.id)}</code></td></tr>`).join("")}
+</table></div>
 <h2>Sold items and shipping</h2>
 <div class="wrap"><table><tr><th>Rule</th><th>When</th><th>Category</th><th>Historical account</th></tr>
 ${PAYOUT_CLASSIFICATION_RULES.map((r) => `<tr><td><b>${esc(r.id)}</b></td><td>${esc(r.when)}</td><td><code>${esc(r.category)}</code></td><td class="small">${esc(CATEGORIES[r.category].historicalAccount ?? "—")}</td></tr>`).join("")}
 </table></div>
-<p class="muted small">Shipping charged to the buyer follows the order's items. On a mixed order it's shared across the item categories in proportion. Ownership comes from the item's stock record, a SKU prefix rule, or the <code>L-</code> convention (LOFI-owned). Division 66 is shown per line as <i>not assessed</i> unless the item's acquisition source and condition are recorded.</p>
+<p class="muted small">Shipping charged to the buyer follows the order's items. On a mixed order it's shared across the item categories in proportion. Ownership comes from the item's stock record, then a staff SKU prefix rule, then the SKU conventions above. Division 66 is shown per line as <i>not assessed</i> unless the item's acquisition source and condition are recorded.</p>
 <h2>Refunds, fees and adjustments</h2>
 <div class="wrap"><table><tr><th>Line</th><th>Category</th></tr>
 <tr><td>Refund</td><td><code>REFUND</code>, recording the category it reverses (worked out by the rules above on the original order)</td></tr>
@@ -726,8 +732,9 @@ function factForm(g: Group, d: ReviewData, back: string, skusInQueue: string[]):
   const pre = cur
     ? null
     : [...d.prefixes].sort((a, b) => b.prefix.length - a.prefix.length).find((p) => sku.toUpperCase().startsWith(p.prefix.toUpperCase())) ?? null;
+  const conv = !cur && !pre ? skuOwnershipRule(sku) : null;
   const v = {
-    ownership: cur?.ownership ?? pre?.ownership ?? "",
+    ownership: cur?.ownership ?? pre?.ownership ?? conv?.ownership ?? "",
     acquired_from: cur?.acquired_from ?? pre?.acquired_from ?? "",
     item_condition: cur?.item_condition ?? pre?.item_condition ?? "",
     purchase: cur?.purchase_cents != null ? fmt(cur.purchase_cents).replace(/[$,]/g, "") : "",
@@ -768,7 +775,7 @@ ${
 <label class="inline small"><input type="checkbox" name="replace" value="1"> Replace an existing rule for this prefix</label></details>`
     : ""
 }
-${cur ? `<div class="muted small">Editing the record for ${esc(sku)}.</div>` : pre ? `<div class="muted small">Currently from SKU prefix rule "${esc(pre.prefix)}".</div>` : ""}
+${cur ? `<div class="muted small">Editing the record for ${esc(sku)}.</div>` : pre ? `<div class="muted small">Currently from SKU prefix rule "${esc(pre.prefix)}".</div>` : conv ? `<div class="muted small">Ownership from LOFI's SKU convention <code>${esc(conv.id)}</code>. Saving creates the item's own record.</div>` : ""}
 </form>`;
 }
 

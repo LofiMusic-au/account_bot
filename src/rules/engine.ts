@@ -419,12 +419,12 @@ export function classifyLine(order: OrderSale, line: SaleLine, item: StockItem |
     item.source === "item"
       ? `stock record ${item.sku}`
       : item.source === "convention"
-        ? `SKU convention "L-" = LOFI-owned (no individual record)`
+        ? `SKU convention ${item.ruleId} ("${item.prefix}…") = ${item.ownership === "owned" ? "LOFI-owned" : "consignment"} (ownership only, no individual record)`
         : `SKU prefix rule "${item.prefix ?? "?"}" (no individual record)`,
   ];
   if (line.skuFromListing) flags.push("No SKU on the eBay listing: facts are recorded against the listing ID");
   if (item.source === "prefix") flags.push("Classified from SKU prefix default, not an individual stock record");
-  if (item.source === "convention") flags.push('Ownership from LOFI\'s "L-" SKU convention; other facts must be recorded');
+  if (item.source === "convention") flags.push(`Ownership from LOFI's SKU convention ${item.ruleId}; other facts must be recorded`);
 
   let scenario: ScenarioCode;
   if (item.overrideScenario) {
