@@ -5,7 +5,7 @@ import { FEE_CATEGORIES, REPORT_VERSION, saleScenarioCounts, type PayoutReport }
 import type { ReportSummary, SourceInfo } from "./db";
 import type { Channel, FeeCategory, Issue, LineClassification, SourceRef } from "./types";
 import { CATEGORIES, HISTORICAL_BASELINE, type LogicalCategory } from "./accounting/categories";
-import { periodTotals } from "./accounting/consignment";
+import { periodTotals, type SettlementRule } from "./accounting/consignment";
 import type { ConsignmentRow } from "./db";
 
 const esc = (s: unknown) =>
@@ -338,7 +338,27 @@ function baselineSection(r: PayoutReport): string {
 <tr class="total"><td>Total (equals the reconstructed payout)</td><td></td><td class="n">${fmt(b.sumCents)}</td></tr></table></div>`;
 }
 
-export function renderConsignments(rows: ConsignmentRow[], period: string | undefined, periods: string[]): Response {
+export interface ConsignmentsPage {
+  rows: ConsignmentRow[];
+  period?: string;
+  periods: string[];
+  rules: SettlementRule[];
+  consignors: (ConsignorOption & { settlement_rule_id?: number | null })[];
+  msg?: string;
+}
+
+const BAS_LABEL: Record<string, string> = {
+  unconfirmed: "Unconfirmed (no figure until LOFI and the accountant confirm)",
+  gst_on_lofi_share: "GST = 1/11 of LOFI's share",
+  none: "No GST on LOFI's share",
+};
+const pctLabel = (bp: number) => `${(bp / 100).toString()}%`;
+const ruleSummary = (r: SettlementRule) =>
+  r.parties.map((p) => `${p.name} ${p.shareBp != null ? pctLabel(p.shareBp) : fmt(p.fixedCents ?? 0)}`).join(" / ");
+
+export function renderConsignments(d: ConsignmentsPage): Response {
+  const { rows, period, periods, rules, consignors } = d;
+  const back = period ? `/consignments?period=${period}` : "/consignments";
   const totals = periodTotals(
     rows.map((r) => ({
       accountingPeriod: r.accounting_period,
@@ -346,9 +366,14 @@ export function renderConsignments(rows: ConsignmentRow[], period: string | unde
       consignorName: r.consignor_name,
       status: r.status === "calculated" ? ("calculated" as const) : ("incomplete" as const),
       grossSaleCents: r.gross_sale_cents,
-      commissionCents: r.commission_cents,
-      commissionGstCents: r.commission_gst_cents,
-      consignorPayableCents: r.consignor_payable_cents,
+      feesCents: r.fees_cents,
+      postageCents: r.postage_cents,
+      repairsCents: r.repairs_cents,
+      otherCents: r.other_cents,
+      distributableNetCents: r.distributable_net_cents,
+      consignorShareCents: r.consignor_share_cents,
+      lofiShareCents: r.lofi_share_cents,
+      otherSharesCents: r.other_shares_cents,
     })),
   );
   const byPeriod = new Map<string, typeof totals>();
@@ -360,45 +385,117 @@ export function renderConsignments(rows: ConsignmentRow[], period: string | unde
         : `<a class="chip" style="color:var(--muted);text-decoration:none" href="/consignments${p ? `?period=${p}` : ""}">${p ?? "All periods"}</a>`,
     )
     .join(" ")}</div>`;
-  const sum = (ts: typeof totals, k: "grossSaleCents" | "commissionCents" | "commissionGstCents" | "commissionExGstCents" | "consignorPayableCents") =>
-    ts.reduce((a, t) => a + t[k], 0);
-  const periodBlocks = [...byPeriod]
-    .map(
-      ([p, ts]) => `<h2>${esc(p)}</h2>
+  const sum = (ts: typeof totals, k: keyof Omit<(typeof totals)[number], "period" | "consignorId" | "consignorName">) => ts.reduce((a, t) => a + (t[k] as number), 0);
+  const money = (c: number | null | undefined) => (c === null || c === undefined ? "" : fmt(c));
+
+  const settlement = [...byPeriod]
+    .map(([p, ts]) => {
+      const inc = ts.reduce((a, t) => a + t.incomplete, 0);
+      return `<h2>Draft settlement — ${esc(p)}</h2>
 <div class="tiles">
-<div class="tile"><div class="muted">Consignment sales</div><div class="v">${fmt(sum(ts, "grossSaleCents"))}</div></div>
-<div class="tile"><div class="muted">Provisional LOFI commission (ex GST)</div><div class="v">${fmt(sum(ts, "commissionExGstCents"))}</div></div>
-<div class="tile"><div class="muted">Provisional GST on commission</div><div class="v">${fmt(sum(ts, "commissionGstCents"))}</div></div>
-<div class="tile"><div class="muted">Provisional consignor share</div><div class="v">${fmt(sum(ts, "consignorPayableCents"))}</div></div>
+<div class="tile"><div class="muted">Sales</div><div class="v">${fmt(sum(ts, "grossSaleCents"))}</div></div>
+<div class="tile"><div class="muted">Postage + fees + repairs + other</div><div class="v">${fmt(sum(ts, "postageCents") + sum(ts, "feesCents") + sum(ts, "repairsCents") + sum(ts, "otherCents"))}</div></div>
+<div class="tile"><div class="muted">NET</div><div class="v">${fmt(sum(ts, "netCents"))}</div></div>
+<div class="tile"><div class="muted">Consignor shares (provisional)</div><div class="v">${fmt(sum(ts, "consignorShareCents"))}</div></div>
+<div class="tile"><div class="muted">LOFI share (provisional)</div><div class="v">${fmt(sum(ts, "lofiShareCents"))}</div></div>
+<div class="tile"><div class="muted">Other partners (provisional)</div><div class="v">${fmt(sum(ts, "otherSharesCents"))}</div></div>
 </div>
-<p class="muted small">Shadow figures to compare with Jess's ledger for the period. Not for payouts or journals.${
-        ts.some((t) => t.incomplete) ? ` <span class="review">${ts.reduce((a, t) => a + t.incomplete, 0)} entr${ts.reduce((a, t) => a + t.incomplete, 0) === 1 ? "y is" : "ies are"} incomplete and not included.</span>` : ""
-      }</p>
-<div class="wrap"><table><tr><th>Consignor</th><th class="n">Entries</th><th class="n">Sales</th><th class="n">Commission</th><th class="n">GST on commission</th><th class="n">Consignor share (provisional)</th></tr>
+${inc ? `<p class="review small">${inc} entr${inc === 1 ? "y is" : "ies are"} incomplete (no consignor or settlement rule) and not included.</p>` : ""}
+<div class="wrap"><table><tr><th>Consignor</th><th class="n">Items</th><th class="n">Sale</th><th class="n">Postage</th><th class="n">Fees</th><th class="n">Repairs</th><th class="n">Other</th><th class="n">NET</th><th class="n">Consignor</th><th class="n">LOFI</th><th class="n">Other partners</th></tr>
 ${ts
   .map(
     (t) => `<tr><td>${esc(t.consignorName ?? "No consignor recorded")}</td><td class="n">${t.entries}${t.incomplete ? ` <span class="review small">(${t.incomplete} incomplete)</span>` : ""}</td>
-<td class="n">${fmt(t.grossSaleCents)}</td><td class="n">${fmt(t.commissionCents)}</td><td class="n">${fmt(t.commissionGstCents)}</td><td class="n">${fmt(t.consignorPayableCents)}</td></tr>`,
+<td class="n">${fmt(t.grossSaleCents)}</td><td class="n">${fmt(t.postageCents)}</td><td class="n">${fmt(t.feesCents)}</td><td class="n">${fmt(t.repairsCents)}</td><td class="n">${fmt(t.otherCents)}</td>
+<td class="n"><b>${fmt(t.netCents)}</b></td><td class="n">${fmt(t.consignorShareCents)}</td><td class="n">${fmt(t.lofiShareCents)}</td><td class="n">${fmt(t.otherSharesCents)}</td></tr>`,
   )
-  .join("")}</table></div>`,
-    )
+  .join("")}</table></div>`;
+    })
     .join("");
-  const detail = `<h2>Entries</h2><div class="wrap"><table><tr><th>Date</th><th>Order</th><th>SKU</th><th>Consignor</th><th>Rule</th><th class="n">Sale</th><th class="n">Commission</th><th class="n">GST</th><th class="n">Consignor share</th><th>Status</th></tr>
+
+  const costForm = (r: ConsignmentRow) =>
+    r.kind === "sale"
+      ? `<form class="factform" method="post" action="/consignments/costs">
+<input type="hidden" name="channel" value="${esc(r.channel)}"><input type="hidden" name="order_id" value="${esc(r.order_id)}">
+<input type="hidden" name="line_item_id" value="${esc(r.line_item_id)}"><input type="hidden" name="return" value="${esc(back)}">
+<input name="postage" class="money" inputmode="decimal" placeholder="Postage $" aria-label="Actual postage" value="${r.postage_source === "manual" ? esc(fmt(r.postage_cents).replace(/[$,]/g, "")) : ""}">
+<input name="repairs" class="money" inputmode="decimal" placeholder="Repairs $" aria-label="Repairs" value="${r.repairs_cents ? esc(fmt(r.repairs_cents).replace(/[$,]/g, "")) : ""}">
+<input name="other" class="money" inputmode="decimal" placeholder="Other $" aria-label="Other agreed costs" value="${r.other_cents ? esc(fmt(r.other_cents).replace(/[$,]/g, "")) : ""}">
+<button class="alt">Save costs</button></form>`
+      : "";
+
+  const ledger = `<h2>Ledger</h2>
+<p class="muted small">One row per consigned item sold, in the layout of Jess's ledger. The sale and fees come in automatically. Postage uses the platform's shipping label when there is one, and you can type over it. Repairs and other costs are entered here. NET is split by the item's settlement rule.</p>
+<div class="wrap"><table><tr><th>Date</th><th>Item</th><th>Consignor / rule</th><th class="n">Sale</th><th class="n">Postage</th><th class="n">Fees</th><th class="n">Repairs</th><th class="n">Other</th><th class="n">NET</th><th class="n">Consignor</th><th class="n">LOFI</th><th class="n">Others</th><th>BAS</th><th>Costs</th></tr>
 ${rows
+  .map((r) => {
+    const shares = r.shares_json ? (JSON.parse(r.shares_json) as { role: string; name: string; cents: number }[]) : [];
+    const others = shares.filter((x) => x.role === "partner");
+    return `<tr><td>${esc(r.sale_date)}${r.kind === "refund" ? ` ${chip("review", "refund")}` : ""}</td>
+<td>${esc(r.title ?? "")}<div class="small"><code>${esc(r.sku ?? "")}</code> · <a href="${payoutLink(r.channel, r.payout_id)}">${esc(r.order_name ?? "")}</a></div></td>
+<td>${esc(r.consignor_name ?? "—")}<div class="small muted">${esc(r.rule_name ?? "")}</div>${r.status !== "calculated" ? `<div class="small review">${esc(r.problem ?? "")}</div>` : ""}</td>
+<td class="n">${fmt(r.gross_sale_cents)}${r.shipping_charged_cents ? `<div class="small muted">incl. ${fmt(r.shipping_charged_cents)} shipping</div>` : ""}</td>
+<td class="n">${fmt(r.postage_cents)}<div class="small muted">${r.postage_source === "manual" ? "entered" : r.postage_source === "shipping_label" ? "label" : ""}</div></td>
+<td class="n">${fmt(r.fees_cents)}</td><td class="n">${fmt(r.repairs_cents)}</td><td class="n">${fmt(r.other_cents)}</td>
+<td class="n"><b>${money(r.distributable_net_cents)}</b></td><td class="n">${money(r.consignor_share_cents)}</td><td class="n">${money(r.lofi_share_cents)}</td>
+<td class="n">${others.length ? others.map((o) => `${esc(o.name)} ${fmt(o.cents)}`).join("<br>") : money(r.other_shares_cents)}</td>
+<td class="small">${r.bas_treatment === null ? "" : r.lofi_share_gst_cents === null ? `<span class="muted">unconfirmed</span>` : fmt(r.lofi_share_gst_cents)}</td>
+<td>${costForm(r)}</td></tr>`;
+  })
+  .join("")}
+${rows.length === 0 ? `<tr><td colspan="14" class="muted">No consignment sales yet. They appear here automatically when a payout includes a consigned item.</td></tr>` : ""}</table></div>`;
+
+  const ruleOptions = (current?: number | null) =>
+    `<option value="">No rule</option>${rules.map((r) => `<option value="${r.id}"${r.id === current ? " selected" : ""}>${esc(r.name)} — ${esc(ruleSummary(r))}</option>`).join("")}`;
+  const partyRow = (i: number, role: string, name: string) => `<div class="factform">
+<select name="party_role_${i}" aria-label="Party ${i + 1} role">${[["", "—"], ["consignor", "Consignor"], ["lofi", "LOFI"], ["partner", "Other partner"]]
+    .map(([v, l]) => `<option value="${v}"${v === role ? " selected" : ""}>${l}</option>`)
+    .join("")}</select>
+<input name="party_name_${i}" placeholder="Name" value="${esc(name)}" aria-label="Party ${i + 1} name">
+<input name="party_pct_${i}" class="pct" inputmode="decimal" placeholder="%" aria-label="Party ${i + 1} percent">
+<span class="muted small">or</span><input name="party_fixed_${i}" class="money" inputmode="decimal" placeholder="Fixed $" aria-label="Party ${i + 1} fixed amount"></div>`;
+  const rulesSection = `<h2>Settlement rules</h2>
+<p class="muted small">A rule says which costs come off the sale and how NET is shared, e.g. 65/25/10. Fixed amounts come off first. The percentage shares split the rest and must add up to 100%. Each consignor has a default rule.</p>
+<div class="wrap"><table><tr><th>Rule</th><th>Shares</th><th>Deducts</th><th>BAS on LOFI's share</th></tr>
+${rules
   .map(
-    (r) => `<tr><td>${esc(r.sale_date)}${r.kind === "refund" ? ` ${chip("review", "refund")}` : ""}</td>
-<td><a href="${payoutLink(r.channel, r.payout_id)}">${esc(r.order_name ?? "")}</a></td><td><code>${esc(r.sku ?? "")}</code></td>
-<td>${esc(r.consignor_name ?? "—")}</td><td class="small">${r.commission_type === "percent" ? `${r.commission_value}%` : r.commission_type === "fixed" ? `$${r.commission_value} each` : "—"}</td>
-<td class="n">${fmt(r.gross_sale_cents)}</td><td class="n">${r.commission_cents === null ? "" : fmt(r.commission_cents)}</td>
-<td class="n">${r.commission_gst_cents === null ? "" : fmt(r.commission_gst_cents)}</td><td class="n">${r.consignor_payable_cents === null ? "" : fmt(r.consignor_payable_cents)}</td>
-<td>${r.status === "calculated" ? chip("draft", "provisional") : `${chip("review", "incomplete")}<div class="small muted">${esc(r.problem ?? "")}</div>`}</td></tr>`,
+    (r) => `<tr><td><b>${esc(r.name)}</b></td><td>${esc(ruleSummary(r))}</td>
+<td class="small">${[r.deductPostage && "postage", r.deductFees && "fees", r.deductRepairs && "repairs", r.deductOther && "other"].filter(Boolean).join(", ") || "nothing"}${r.includeShippingCharged ? "" : "; sale excludes shipping charged"}</td>
+<td class="small">${esc(BAS_LABEL[r.basTreatment] ?? r.basTreatment)}</td></tr>`,
   )
   .join("")}
-${rows.length === 0 ? `<tr><td colspan="10" class="muted">No consignment sales yet. They appear here automatically when a payout includes a consigned item.</td></tr>` : ""}</table></div>`;
+${rules.length === 0 ? `<tr><td colspan="4" class="muted">No rules yet. Add one below.</td></tr>` : ""}</table></div>
+<h3 style="font-size:14px">Consignors' default rules</h3>
+<div class="wrap"><table><tr><th>Consignor</th><th>Default rule</th></tr>
+${consignors
+  .map(
+    (c) => `<tr><td>${esc(c.name)}${c.country ? ` <span class="muted small">${esc(c.country)}</span>` : ""}</td><td><form class="factform" method="post" action="/consignments/assign">
+<input type="hidden" name="consignor_id" value="${c.id}"><input type="hidden" name="return" value="${esc(back)}">
+<select name="rule_id" aria-label="Default rule for ${esc(c.name)}">${ruleOptions(c.settlement_rule_id)}</select><button class="alt">Set</button></form></td></tr>`,
+  )
+  .join("")}
+${consignors.length === 0 ? `<tr><td colspan="2" class="muted">No consignors yet. <a href="/stock/new#new-consignor">Add one</a>.</td></tr>` : ""}</table></div>
+<h3 style="font-size:14px">New rule</h3>
+<form method="post" action="/consignments/rules" class="note" style="display:flex;flex-direction:column;gap:8px">
+<input type="hidden" name="return" value="${esc(back)}">
+<div class="factform"><input name="name" placeholder='Rule name, e.g. "65/25/10"' required aria-label="Rule name">
+<select name="consignor_id" aria-label="Make default for consignor"><option value="">Default for consignor… (optional)</option>${consignors.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></div>
+${partyRow(0, "consignor", "")}${partyRow(1, "lofi", "LOFI")}${partyRow(2, "", "")}${partyRow(3, "", "")}${partyRow(4, "", "")}
+<div class="factform small">Deduct from the sale:
+<label class="inline"><input type="checkbox" name="deduct_postage" value="1" checked> postage</label>
+<label class="inline"><input type="checkbox" name="deduct_fees" value="1" checked> fees</label>
+<label class="inline"><input type="checkbox" name="deduct_repairs" value="1" checked> repairs</label>
+<label class="inline"><input type="checkbox" name="deduct_other" value="1" checked> other</label>
+<label class="inline"><input type="checkbox" name="include_shipping" value="1" checked> sale includes shipping the buyer paid</label></div>
+<div class="factform small">BAS on LOFI's share: <select name="bas_treatment" aria-label="BAS treatment">${Object.entries(BAS_LABEL)
+    .map(([v, l]) => `<option value="${v}">${esc(l)}</option>`)
+    .join("")}</select></div>
+<div><button>Add rule</button></div></form>`;
+
   const body = `<h1>Consignment ledger <span class="chip draft">SHADOW MODE</span></h1>
 <div class="banner"><b>Consignment module — shadow mode.</b> Jess's manual consignment ledger is the source of truth. Everything on this page is provisional and non-authoritative. Don't use it for consignor payouts, GST journals or liability balances. It runs alongside so its results can be compared with Jess's ledger before any switch-over.</div>
-<p class="muted">A draft of the consignment spreadsheet, filled from the same sales as the payout reconciler. Every consigned item in a payout appears here automatically. Each consignor's rule is applied: commission = rule × sale price after discounts, excluding shipping. GST on commission is 1/11 of the commission, and the consignor is paid the rest. The payout split records the full sale as <b>CONSIGNMENT_SALES_NO_GST</b>, and this ledger supplies the commission figures for the period's journal. ${esc(HISTORICAL_BASELINE.label)}.</p>
-${periodLinks}${periodBlocks}${detail}`;
+${message(d.msg)}
+<p class="muted">Sale − postage − fees − repairs − other costs = NET, shared by each item's settlement rule. ${esc(HISTORICAL_BASELINE.label)}.</p>
+${periodLinks}${settlement}${ledger}${rulesSection}`;
   return page("Consignments", body);
 }
 

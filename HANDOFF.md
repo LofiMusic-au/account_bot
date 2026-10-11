@@ -144,19 +144,29 @@ This is how LOFI accounts for marketplace payouts today. The system reproduces i
 |---|---|---|
 | LOFI-owned sale in Australia | Sales - GST | `SALES_DOMESTIC_GST` |
 | LOFI-owned sale overseas | Overseas Sales - No GST | `SALES_OVERSEAS_NO_GST` |
-| Consignment sale (full amount) | consignment sales, no GST | `CONSIGNMENT_SALES_NO_GST` |
+| Consignment sale (full amount) | consignment sales, no GST | `CONSIGNMENT_SALES_NO_GST` (the split is worked out in the stage 2 ledger) |
 | eBay / Shopify fees | eBay Fees - No GST, etc. | `EBAY_FEES` / `SHOPIFY_FEES` |
 | Refunds | reverse the original | `REFUND` (records the category it reverses) |
 
-**Stage 2: consignment subledger (a hand-kept spreadsheet until now).** Each consignment sale was entered against that consignor's rule. The spreadsheet worked out LOFI's commission, the GST on the commission, and the amount owed to the consignor. Once per period, LOFI journalled the total commission and its GST into QuickBooks.
+**Stage 2: consignment ledger (Jess's hand-kept spreadsheet, still the source of truth).** Each consigned item sold is a row with these columns:
+- Sale
+- actual Postage
+- marketplace Fees
+- Repairs
+- = NET, then split between the parties by that consignor's arrangement, for example 65/25/10, 65/25/5/5, 75/20/5 or 50/50
+- a BAS column for GST
 
 **What the system does:**
 - **Stage 1:** `src/accounting/baseline.ts` gives every payout line a logical category from ownership and destination only. Missing facts give `UNCLASSIFIED`, never a guess. The split always adds up to the payout.
-- **Stage 2:** `src/accounting/consignment.ts` builds the subledger (the `consignment_sales` table and the Consignments page) from the same sales, so nothing is re-keyed:
-  - commission is the rule applied to the item price after discounts, excluding shipping
-  - commission GST is 1/11 of the commission, kept separate from the marketplace sale
-  - the consignor is owed the basis minus the commission
-  - totals are shown per month and consignor
+- **Stage 2 (shadow only):** `src/accounting/consignment.ts` builds a shadow copy of Jess's ledger from the same sales, so nothing is re-keyed. It uses the `consignment_entries` table and the Consignments page:
+  - **Sale:** the item price after discounts, plus the shipping the buyer paid (each rule can switch this off).
+  - **Fees:** marketplace and payment fees come in automatically.
+  - **Postage:** the platform shipping-label cost when there is one, or entered by hand.
+  - **Repairs and other agreed costs:** entered by hand.
+  - **NET:** the sale less whichever costs the item's **settlement rule** deducts.
+  - **Shares:** NET is shared between the rule's parties (one consignor, LOFI, and any other partners). Fixed amounts come off first, then percentages, always adding up to NET exactly.
+  - **Audit:** every component and party share is stored per sale.
+  - **Monthly view:** a draft settlement per month and consignor.
 - **QuickBooks:** categories are logical codes, mapped to QuickBooks account IDs in milestone 2. Nothing is posted yet.
 
 **Consignment module status: SHADOW MODE.** Jess's manual consignment ledger stays the operational source of truth. The module in this repo is a prototype that runs alongside it, fed from the same normalised sales as the payout reconciler. Its figures are provisional and non-authoritative:
@@ -168,11 +178,10 @@ This is how LOFI accounts for marketplace payouts today. The system reproduces i
 
 This phase exists to show the module can reproduce Jess's ledger over several real months before any cutover. The payout reconciler remains the primary build.
 
-**Known gap in the shadow ledger.** Jess's ledger works from a NET figure: sale, less postage, marketplace fees and repairs. It then splits that across several parties, for example 65/25/10, 65/25/5/5, 75/20/5 or 50/50. The shadow calculation currently applies a single LOFI commission to the item price. So it won't match Jess's ledger until these are modelled:
-- multi-party split rules
-- fee, postage and repair deductions (fees automatically, postage and repairs entered by hand at first)
-
-That is the next shadow-phase task. It stays shadow-only.
+**Still open in the shadow ledger:**
+- **BAS / GST on LOFI's share is not assumed.** Each rule's BAS treatment starts as "unconfirmed", with no figure, until LOFI and the accountant confirm what Jess's BAS column means for that arrangement.
+- **Not yet compared with Jess's ledger.** Run it against several real months before trusting it. Jess's ledger stays authoritative.
+- **No integrations yet.** There is no Australia Post or repair-system feed. Postage and repairs are entered by hand.
 
 **This baseline is LOFI's current operational treatment, not an accountant-approved one.** The draft GST scenarios in `src/rules/` and their sign-off remain authoritative for any change. Both run side by side. Each payout shows the historical split and the draft-scenario classification.
 
@@ -183,12 +192,14 @@ That is the next shadow-phase task. It stays shadow-only.
 **Ownership convention:** SKUs beginning `L-` are LOFI-owned. That sets ownership only. The acquisition source, condition and price must still be recorded before a GST scenario (A1/A2/A3) is derived. `LC-` and other L-letter prefixes aren't covered until their meaning is confirmed.
 
 **Working assumptions to confirm with LOFI and the accountant:**
-- **Commission basis:** the item price after discounts, GST-inclusive, excluding shipping. Shipping share is recorded for information only.
+- **Sale in the shadow ledger:** the item price after discounts plus the shipping the buyer paid, because actual postage is deducted separately. Each rule can exclude shipping. Confirm against Jess's ledger.
 - **Accounting period:** the calendar month of the payout date.
-- **Commission GST:** 1/11 of the commission for every consignor, including registered and 153-B ones, as in the old spreadsheet.
+- **BAS / GST on LOFI's share:** unresolved and not assumed. Rules start as "unconfirmed". "1/11 of LOFI's share" or "none" can be chosen per rule once confirmed.
+- **Fees on a multi-item order:** shared across its lines in proportion to the amounts. Shipping labels count as postage, not fees.
+- **Refunds:** reverse the split, including fixed amounts. Manual costs aren't applied to refund rows.
 - **Shipping on a mixed order:** shared across its item categories in proportion. The historical method didn't split shipping.
 - **eBay International Shipping:** split as overseas. C2 is still unresolved in the draft scenarios.
-- **Consignor active dates:** stored only. Rules aren't versioned over time, because nothing yet shows that's needed.
+- **Consignor active dates and rule versions:** stored only. Rules aren't versioned over time yet. An item can override its consignor's rule (`stock_items.settlement_rule_id`), but there's no UI for that yet.
 - **`LC-`:** whether it means LOFI-owned is unknown, so only `L-` is treated as owned.
 
 ## 5. What's verified vs assumed about the platform APIs
@@ -265,10 +276,10 @@ From about 500 of the 2,927 Shopify variants (the newest 250 and the oldest 250)
    - Flip `signedOff`, set `FEE_TAX` and the EIS treatment.
    - Implement the C4 FX policy: store the buyer-currency amount and the approved rate, and post the difference to FX Gain/Loss.
 8b. **Consignment shadow phase** (secondary, never operational until signed off):
-   - Model Jess's ledger: multi-party split rules, plus fee, postage and repair deductions to NET.
-   - Compare against several real months of Jess's ledger.
+   - The ledger model is in place: settlement rules, cost deductions, NET and multi-party shares.
+   - Next: enter LOFI's real rules and compare several months against Jess's ledger, then confirm BAS treatment per arrangement.
    - No payouts, journals or authoritative balances.
-9. **Milestone 2: QBO posting.** The first target is to reproduce the historical baseline exactly: post the stage 1 split by logical category, and the stage 2 periodic consignment journal. Improve it only after accountant sign-off.
+9. **Milestone 2: QBO posting.** The first target is to reproduce the historical baseline exactly: post the stage 1 split by logical category. A consignment journal comes only after the shadow ledger has matched Jess's ledger and been signed off. Improve it only after accountant sign-off.
    - Intuit app (LOFI has one), OAuth.
    - Map `ACCOUNTS` and tax codes to the real QBO chart of accounts and AU tax codes.
    - Create Sales Receipts per sale against the clearing account, fees as expenses, and the payout as a Transfer.

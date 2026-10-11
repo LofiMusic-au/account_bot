@@ -20,7 +20,7 @@ Read `HANDOFF.md` first for the full project context, the decisions made and the
 
 LOFI's current method has two stages:
 1. **Payout split:** owned domestic goes to `SALES_DOMESTIC_GST`, owned overseas to `SALES_OVERSEAS_NO_GST`, and consignment in full to `CONSIGNMENT_SALES_NO_GST`. Fees go to `EBAY_FEES` / `SHOPIFY_FEES`, and refunds reverse the original category. This is `src/accounting/baseline.ts`.
-2. **Consignment subledger:** commission per consignor rule, 1/11 GST on the commission, the rest payable to the consignor, totalled per month for the periodic journal. This is `src/accounting/consignment.ts` and the `consignment_sales` table.
+2. **Consignment ledger (shadow):** mirrors Jess's ledger. Sale − postage − fees − repairs − other = NET, then shared by the item's settlement rule (multi-party, e.g. 65/25/10), giving a draft monthly settlement. BAS on LOFI's share is "unconfirmed" unless a rule says otherwise. This is `src/accounting/consignment.ts`, `settlement_rules` and `consignment_entries`.
 
 **The consignment module is in SHADOW MODE (`CONSIGNMENT_MODULE_MODE`).** Jess's manual ledger is the source of truth. Never use the module's figures for consignor payouts, QuickBooks journals, liability balances or payment automation, and never write code that marks entries posted or paid. A test enforces this. The payout reconciler is the primary build.
 

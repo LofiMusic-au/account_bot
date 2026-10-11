@@ -1,7 +1,15 @@
 // D1 access: stock/consignor facts, source provenance, and payout reports.
 
 import { saleScenarioCounts, type PayoutReport } from "./reconcile";
-import type { ConsignmentEntry } from "./accounting/consignment";
+import {
+  costKey,
+  validateRule,
+  type BasTreatment,
+  type ConsignmentEntry,
+  type ManualCosts,
+  type PartyRole,
+  type SettlementRule,
+} from "./accounting/consignment";
 import type { StockResolver } from "./rules/engine";
 import type {
   AcquiredFrom,
@@ -24,6 +32,7 @@ export interface ConsignorRow {
   commission_type: "percent" | "fixed";
   commission_value: number;
   agreement_type: "agency" | "153B" | null;
+  settlement_rule_id?: number | null;
 }
 export interface StockRow {
   sku: string;
@@ -40,6 +49,7 @@ export interface StockRow {
   commission_type: "percent" | "fixed" | null;
   commission_value: number | null;
   override_scenario: ScenarioCode | null;
+  settlement_rule_id?: number | null;
 }
 export interface PrefixRow {
   prefix: string;
@@ -60,6 +70,7 @@ const toConsignor = (r: ConsignorRow): Consignor => ({
   commissionType: r.commission_type,
   commissionValue: r.commission_value,
   agreementType: r.agreement_type === "agency" || r.agreement_type === "153B" ? r.agreement_type : null,
+  settlementRuleId: r.settlement_rule_id ?? null,
 });
 
 /**
@@ -93,6 +104,7 @@ export function makeResolver(items: StockRow[], prefixes: PrefixRow[], consignor
         commissionType: row.commission_type,
         commissionValue: row.commission_value,
         overrideScenario: row.override_scenario,
+        settlementRuleId: row.settlement_rule_id ?? null,
         source: "item",
         div66RecordComplete: isDiv66
           ? !!(row.seller_name && row.seller_address && row.seller_description && row.purchase_date && row.purchase_cents)
@@ -320,14 +332,113 @@ export async function sourceInfo(db: D1Database, channel: string, payoutId: stri
     .first<SourceInfo>();
 }
 
-// ------------------------------------------------------- consignment ledger
+// ------------------------------------------------- consignment ledger (SHADOW)
+
+interface RuleRow {
+  id: number;
+  name: string;
+  deduct_postage: number;
+  deduct_fees: number;
+  deduct_repairs: number;
+  deduct_other: number;
+  include_shipping_charged: number;
+  bas_treatment: BasTreatment;
+}
+interface PartyRow {
+  rule_id: number;
+  position: number;
+  role: PartyRole;
+  name: string;
+  share_bp: number | null;
+  fixed_cents: number | null;
+}
+
+export async function loadRules(db: D1Database): Promise<Map<number, SettlementRule>> {
+  const rules = (await db.prepare("SELECT * FROM settlement_rules ORDER BY name").all<RuleRow>()).results;
+  const parties = (await db.prepare("SELECT * FROM settlement_rule_parties ORDER BY rule_id, position").all<PartyRow>()).results;
+  return new Map(
+    rules.map((r) => [
+      r.id,
+      {
+        id: r.id,
+        name: r.name,
+        deductPostage: r.deduct_postage === 1,
+        deductFees: r.deduct_fees === 1,
+        deductRepairs: r.deduct_repairs === 1,
+        deductOther: r.deduct_other === 1,
+        includeShippingCharged: r.include_shipping_charged === 1,
+        basTreatment: r.bas_treatment,
+        parties: parties.filter((p) => p.rule_id === r.id).map((p) => ({ role: p.role, name: p.name, shareBp: p.share_bp, fixedCents: p.fixed_cents })),
+      },
+    ]),
+  );
+}
+
+/** Create a settlement rule; optionally make it a consignor's default. */
+export async function createRule(db: D1Database, r: Omit<SettlementRule, "id">, defaultForConsignorId?: number): Promise<number> {
+  const errs = validateRule(r);
+  if (!["unconfirmed", "gst_on_lofi_share", "none"].includes(r.basTreatment)) errs.push("unknown BAS treatment");
+  if (errs.length) throw new Error(errs.join("; "));
+  const row = await db
+    .prepare(
+      `INSERT INTO settlement_rules (name, deduct_postage, deduct_fees, deduct_repairs, deduct_other, include_shipping_charged, bas_treatment)
+       VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    )
+    .bind(r.name.trim(), +r.deductPostage, +r.deductFees, +r.deductRepairs, +r.deductOther, +r.includeShippingCharged, r.basTreatment)
+    .first<{ id: number }>();
+  const id = row!.id;
+  await db.batch([
+    ...r.parties.map((p, i) =>
+      db
+        .prepare("INSERT INTO settlement_rule_parties (rule_id, position, role, name, share_bp, fixed_cents) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(id, i, p.role, p.name.trim(), p.shareBp ?? null, p.fixedCents ?? null),
+    ),
+    ...(defaultForConsignorId ? [db.prepare("UPDATE consignors SET settlement_rule_id = ? WHERE id = ?").bind(id, defaultForConsignorId)] : []),
+  ]);
+  return id;
+}
+
+export async function setConsignorRule(db: D1Database, consignorId: number, ruleId: number | null): Promise<void> {
+  await db.prepare("UPDATE consignors SET settlement_rule_id = ? WHERE id = ?").bind(ruleId, consignorId).run();
+}
+
+export async function loadCosts(db: D1Database, channel: string, orderIds: string[]): Promise<Map<string, ManualCosts>> {
+  const rows = await inChunks<{ order_id: string; line_item_id: string; postage_cents: number | null; repairs_cents: number | null; other_cents: number | null }>(
+    db,
+    (q) => `SELECT order_id, line_item_id, postage_cents, repairs_cents, other_cents FROM consignment_costs WHERE channel = ? AND order_id IN (${q})`,
+    [...new Set(orderIds)],
+    [channel],
+  );
+  return new Map(rows.map((r) => [costKey(channel, r.order_id, r.line_item_id), { postageCents: r.postage_cents, repairsCents: r.repairs_cents, otherCents: r.other_cents }]));
+}
+
+/** Record manually entered costs for one sold item. null clears a value (postage then falls back to the shipping label). */
+export async function saveCosts(
+  db: D1Database,
+  channel: string,
+  orderId: string,
+  lineItemId: string,
+  c: ManualCosts & { note?: string | null },
+): Promise<void> {
+  for (const [k, v] of Object.entries({ postage: c.postageCents, repairs: c.repairsCents, other: c.otherCents })) {
+    if (v !== null && (!Number.isInteger(v) || v < 0)) throw new Error(`${k} isn't a valid amount`);
+  }
+  await db
+    .prepare(
+      `INSERT INTO consignment_costs (channel, order_id, line_item_id, postage_cents, repairs_cents, other_cents, note, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT (channel, order_id, line_item_id) DO UPDATE SET postage_cents = excluded.postage_cents,
+         repairs_cents = excluded.repairs_cents, other_cents = excluded.other_cents, note = excluded.note, updated_at = excluded.updated_at`,
+    )
+    .bind(channel, orderId, lineItemId, c.postageCents, c.repairsCents, c.otherCents, c.note ?? null)
+    .run();
+}
 
 /**
- * Bring the consignment subledger in line with a payout's current entries.
- * Idempotent on entry_key. Unposted entries are recalculated (a changed
- * consignor rule flows through); posted entries are never touched. Unposted
- * entries that no longer apply (e.g. the item turned out to be LOFI-owned)
- * are removed. Source transactions are never modified here.
+ * Bring the shadow ledger in line with a payout's current entries. Idempotent
+ * on entry_key; entries are always recalculated (there is no posted state in
+ * shadow mode). Entries that no longer apply are removed. Source
+ * transactions are never touched.
  */
 export async function syncConsignmentLedger(db: D1Database, channel: string, payoutId: string, entries: ConsignmentEntry[], now = new Date()): Promise<void> {
   const ts = now.toISOString();
@@ -336,36 +447,37 @@ export async function syncConsignmentLedger(db: D1Database, channel: string, pay
     stmts.push(
       db
         .prepare(
-          `INSERT INTO consignment_sales (entry_key, channel, payout_id, order_id, order_name, line_item_id, source_transaction_id, sku,
-             consignor_id, kind, sale_date, gross_sale_cents, shipping_cents, discount_cents, commission_basis, commission_type,
-             commission_value, commission_cents, commission_gst_cents, consignor_payable_cents, accounting_period, status, problem,
+          `INSERT INTO consignment_entries (entry_key, channel, payout_id, order_id, order_name, line_item_id, source_transaction_id, sku, title,
+             consignor_id, settlement_rule_id, rule_snapshot_json, kind, sale_date, item_cents, shipping_charged_cents, gross_sale_cents,
+             fees_cents, postage_cents, postage_source, repairs_cents, other_cents, distributable_net_cents, consignor_share_cents,
+             lofi_share_cents, other_shares_cents, shares_json, lofi_share_gst_cents, bas_treatment, accounting_period, status, problem,
              first_recorded_at, last_calculated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           VALUES (${Array(34).fill("?").join(", ")})
            ON CONFLICT (entry_key) DO UPDATE SET
-             order_name = excluded.order_name, sku = excluded.sku, consignor_id = excluded.consignor_id,
-             sale_date = excluded.sale_date, gross_sale_cents = excluded.gross_sale_cents, shipping_cents = excluded.shipping_cents,
-             discount_cents = excluded.discount_cents, commission_basis = excluded.commission_basis,
-             commission_type = excluded.commission_type, commission_value = excluded.commission_value,
-             commission_cents = excluded.commission_cents, commission_gst_cents = excluded.commission_gst_cents,
-             consignor_payable_cents = excluded.consignor_payable_cents, accounting_period = excluded.accounting_period,
-             status = excluded.status, problem = excluded.problem, last_calculated_at = excluded.last_calculated_at
-           WHERE consignment_sales.journal_status = 'unposted'`,
+             order_name = excluded.order_name, sku = excluded.sku, title = excluded.title, consignor_id = excluded.consignor_id,
+             settlement_rule_id = excluded.settlement_rule_id, rule_snapshot_json = excluded.rule_snapshot_json,
+             sale_date = excluded.sale_date, item_cents = excluded.item_cents, shipping_charged_cents = excluded.shipping_charged_cents,
+             gross_sale_cents = excluded.gross_sale_cents, fees_cents = excluded.fees_cents, postage_cents = excluded.postage_cents,
+             postage_source = excluded.postage_source, repairs_cents = excluded.repairs_cents, other_cents = excluded.other_cents,
+             distributable_net_cents = excluded.distributable_net_cents, consignor_share_cents = excluded.consignor_share_cents,
+             lofi_share_cents = excluded.lofi_share_cents, other_shares_cents = excluded.other_shares_cents, shares_json = excluded.shares_json,
+             lofi_share_gst_cents = excluded.lofi_share_gst_cents, bas_treatment = excluded.bas_treatment,
+             accounting_period = excluded.accounting_period, status = excluded.status, problem = excluded.problem,
+             last_calculated_at = excluded.last_calculated_at`,
         )
         .bind(
-          e.entryKey, e.channel, e.payoutId, e.orderId, e.orderName, e.lineItemId, e.sourceTransactionId, e.sku,
-          e.consignorId, e.kind, e.saleDate, e.grossSaleCents, e.shippingCents, e.discountCents, e.commissionBasis, e.commissionType,
-          e.commissionValue, e.commissionCents, e.commissionGstCents, e.consignorPayableCents, e.accountingPeriod, e.status, e.problem,
-          ts, ts,
+          e.entryKey, e.channel, e.payoutId, e.orderId, e.orderName, e.lineItemId, e.sourceTransactionId, e.sku, e.title,
+          e.consignorId, e.settlementRuleId, e.ruleSnapshot ? JSON.stringify(e.ruleSnapshot) : null, e.kind, e.saleDate, e.itemCents,
+          e.shippingChargedCents, e.grossSaleCents, e.feesCents, e.postageCents, e.postageSource, e.repairsCents, e.otherCents,
+          e.distributableNetCents, e.consignorShareCents, e.lofiShareCents, e.otherSharesCents, e.shares ? JSON.stringify(e.shares) : null,
+          e.lofiShareGstCents, e.basTreatment, e.accountingPeriod, e.status, e.problem, ts, ts,
         ),
     );
   }
   const keep = entries.map((e) => e.entryKey);
   stmts.push(
     db
-      .prepare(
-        `DELETE FROM consignment_sales WHERE channel = ? AND payout_id = ? AND journal_status = 'unposted'
-           ${keep.length ? `AND entry_key NOT IN (${keep.map(() => "?").join(",")})` : ""}`,
-      )
+      .prepare(`DELETE FROM consignment_entries WHERE channel = ? AND payout_id = ? ${keep.length ? `AND entry_key NOT IN (${keep.map(() => "?").join(",")})` : ""}`)
       .bind(channel, payoutId, ...keep),
   );
   await db.batch(stmts);
@@ -375,31 +487,43 @@ export interface ConsignmentRow {
   entry_key: string;
   channel: string;
   payout_id: string;
+  order_id: string;
   order_name: string | null;
+  line_item_id: string;
   sku: string | null;
+  title: string | null;
   consignor_id: number | null;
   consignor_name: string | null;
+  rule_name: string | null;
   kind: "sale" | "refund";
   sale_date: string;
+  item_cents: number;
+  shipping_charged_cents: number;
   gross_sale_cents: number;
-  shipping_cents: number;
-  commission_type: string | null;
-  commission_value: number | null;
-  commission_cents: number | null;
-  commission_gst_cents: number | null;
-  consignor_payable_cents: number | null;
+  fees_cents: number;
+  postage_cents: number;
+  postage_source: string;
+  repairs_cents: number;
+  other_cents: number;
+  distributable_net_cents: number | null;
+  consignor_share_cents: number | null;
+  lofi_share_cents: number | null;
+  other_shares_cents: number | null;
+  shares_json: string | null;
+  lofi_share_gst_cents: number | null;
+  bas_treatment: string | null;
   accounting_period: string;
   status: string;
   problem: string | null;
-  journal_status: string;
 }
 
 export async function listConsignmentRows(db: D1Database, period?: string): Promise<ConsignmentRow[]> {
   return (
     await db
       .prepare(
-        `SELECT s.*, c.name AS consignor_name FROM consignment_sales s LEFT JOIN consignors c ON c.id = s.consignor_id
-         ${period ? "WHERE s.accounting_period = ?" : ""} ORDER BY s.accounting_period DESC, c.name, s.sale_date`,
+        `SELECT e.*, c.name AS consignor_name, r.name AS rule_name FROM consignment_entries e
+         LEFT JOIN consignors c ON c.id = e.consignor_id LEFT JOIN settlement_rules r ON r.id = e.settlement_rule_id
+         ${period ? "WHERE e.accounting_period = ?" : ""} ORDER BY e.accounting_period DESC, c.name, e.sale_date`,
       )
       .bind(...(period ? [period] : []))
       .all<ConsignmentRow>()
@@ -494,14 +618,15 @@ export async function reportExists(db: D1Database, channel: string, payoutId: st
 }
 
 /**
- * Delete every payout report, its stored source data and the unposted
+ * Delete every payout report, its stored source data and the shadow
  * consignment ledger entries, so payouts can be fetched fresh. Stock records,
- * SKU prefix rules, consignors, order facts and any posted entries are kept. Returns how many payouts were removed.
+ * SKU prefix rules, consignors, settlement rules, order facts and manually
+ * entered consignment costs are kept. Returns how many payouts were removed.
  */
 export async function clearPayouts(db: D1Database): Promise<number> {
   const n = (await db.prepare("SELECT count(*) AS n FROM payout_reports").first<{ n: number }>())?.n ?? 0;
   await db.batch([
-    db.prepare("DELETE FROM consignment_sales WHERE journal_status = 'unposted'"),
+    db.prepare("DELETE FROM consignment_entries"),
     db.prepare("DELETE FROM payout_reports"),
     db.prepare("DELETE FROM source_transactions"),
     db.prepare("DELETE FROM source_orders"),

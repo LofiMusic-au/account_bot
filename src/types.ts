@@ -224,6 +224,8 @@ export interface Consignor {
   commissionValue: number;
   /** null = not recorded. Never defaulted: it decides B2_AGENCY vs B2_153B. */
   agreementType: "agency" | "153B" | null;
+  /** Default settlement rule for the shadow consignment ledger. */
+  settlementRuleId?: number | null;
 }
 
 /** Facts about one stock item. Tax treatment is derived from these, never stored. */
@@ -240,6 +242,8 @@ export interface StockItem {
   commissionType?: "percent" | "fixed" | null;
   commissionValue?: number | null;
   overrideScenario?: ScenarioCode | null;
+  /** Settlement rule for this item, overriding the consignor's default (shadow ledger). */
+  settlementRuleId?: number | null;
   /** Where the record came from: its own row, a SKU prefix rule, or LOFI's built-in SKU convention. */
   source: "item" | "prefix" | "convention";
   /** The prefix that matched, when source = prefix. */

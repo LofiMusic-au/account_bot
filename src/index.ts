@@ -28,6 +28,11 @@ import {
   setStockFact,
   syncConsignmentLedger,
   listConsignmentRows,
+  loadRules,
+  loadCosts,
+  createRule,
+  saveCosts,
+  setConsignorRule,
   sourceInfo,
   upsertStock,
   validateStock,
@@ -36,7 +41,7 @@ import {
   type StockInput,
 } from "./db";
 import { toCents } from "./money";
-import { consignmentEntries } from "./accounting/consignment";
+import { consignmentEntries, type BasTreatment, type PartyRole } from "./accounting/consignment";
 import { buildReport, type PayoutReport } from "./reconcile";
 import type { Channel, Issue, NormalisedPayout } from "./types";
 import { renderConsignments, renderIndex, renderReport, renderReview, renderStockForm, type ConsignorOption, type ReviewItem } from "./ui";
@@ -103,8 +108,9 @@ export async function rebuild(db: D1Database, payout: NormalisedPayout, extraIss
   const resolve = await loadResolver(db, p);
   const report = buildReport(p, resolve);
   await saveReport(db, report);
-  // Stage 2: the same sales feed the consignment subledger.
-  await syncConsignmentLedger(db, p.channel, p.payoutId, consignmentEntries(p, resolve));
+  // Stage 2 (shadow): the same sales feed the consignment ledger.
+  const ctx = { rules: await loadRules(db), costs: await loadCosts(db, p.channel, [...p.sales, ...p.refunds].map((x) => x.orderId)) };
+  await syncConsignmentLedger(db, p.channel, p.payoutId, consignmentEntries(p, resolve, ctx));
   return report;
 }
 
@@ -134,6 +140,13 @@ async function rebuildOpen(db: D1Database): Promise<{ rebuilt: number; nowReady:
     else stillOpen++;
   }
   return { rebuilt, nowReady, stillOpen };
+}
+
+/** Rebuild every recent payout (including ready ones), e.g. after a shadow-ledger rule or cost changes. */
+export async function rebuildRecent(db: D1Database): Promise<number> {
+  let n = 0;
+  for (const r of await listReports(db, 120)) if (await rebuildStored(db, r.channel, r.payout_id)) n++;
+  return n;
 }
 
 /** The message shown after a fact is saved: what it changed. */
@@ -247,8 +260,71 @@ export default {
     if (req.method === "GET" && path === "/consignments") {
       const qp = url.searchParams.get("period");
       const period = qp && /^\d{4}-\d{2}$/.test(qp) ? qp : undefined;
-      const periods = (await env.DB.prepare("SELECT DISTINCT accounting_period AS p FROM consignment_sales ORDER BY p DESC").all<{ p: string }>()).results.map((x) => x.p);
-      return renderConsignments(await listConsignmentRows(env.DB, period), period, periods);
+      const periods = (await env.DB.prepare("SELECT DISTINCT accounting_period AS p FROM consignment_entries ORDER BY p DESC").all<{ p: string }>()).results.map((x) => x.p);
+      const consignors = (
+        await env.DB.prepare("SELECT id, name, country, australian_gst_registered, agreement_type, commission_type, commission_value, settlement_rule_id FROM consignors ORDER BY name").all<
+          ConsignorOption & { settlement_rule_id: number | null }
+        >()
+      ).results;
+      return renderConsignments({ rows: await listConsignmentRows(env.DB, period), period, periods, rules: [...(await loadRules(env.DB)).values()], consignors, msg });
+    }
+
+    // Shadow ledger inputs. Each one rebuilds every recent payout so the ledger reflects it.
+    if (req.method === "POST" && path === "/consignments/rules") {
+      const f = await form(req);
+      const back = safeReturn(f.return);
+      try {
+        const parties = [0, 1, 2, 3, 4]
+          .filter((i) => f[`party_role_${i}`])
+          .map((i) => ({
+            role: f[`party_role_${i}`] as PartyRole,
+            name: f[`party_name_${i}`] ?? "",
+            shareBp: f[`party_pct_${i}`] ? toCents(f[`party_pct_${i}`]!) : null,
+            fixedCents: f[`party_fixed_${i}`] ? toCents(f[`party_fixed_${i}`]!.replace(/[$,]/g, "")) : null,
+          }));
+        await createRule(
+          env.DB,
+          {
+            name: f.name ?? "",
+            parties,
+            deductPostage: f.deduct_postage === "1",
+            deductFees: f.deduct_fees === "1",
+            deductRepairs: f.deduct_repairs === "1",
+            deductOther: f.deduct_other === "1",
+            includeShippingCharged: f.include_shipping === "1",
+            basTreatment: (f.bas_treatment ?? "unconfirmed") as BasTreatment,
+          },
+          f.consignor_id ? Number(f.consignor_id) : undefined,
+        );
+        await rebuildRecent(env.DB);
+        return redirect(withMsg(back, `Added rule ${f.name}`));
+      } catch (e) {
+        return redirect(withMsg(back, `Not saved: ${(e as Error).message}`));
+      }
+    }
+
+    if (req.method === "POST" && path === "/consignments/assign") {
+      const f = await form(req);
+      const back = safeReturn(f.return);
+      const id = Number(f.consignor_id);
+      if (!Number.isInteger(id)) return redirect(withMsg(back, "Unknown consignor"));
+      await setConsignorRule(env.DB, id, f.rule_id ? Number(f.rule_id) : null);
+      await rebuildRecent(env.DB);
+      return redirect(withMsg(back, "Default rule saved; ledger recalculated"));
+    }
+
+    if (req.method === "POST" && path === "/consignments/costs") {
+      const f = await form(req);
+      const back = safeReturn(f.return);
+      try {
+        const amt = (v?: string) => (v ? toCents(v.replace(/[$,]/g, "")) : null);
+        if (!f.channel || !f.order_id || !f.line_item_id) throw new Error("missing sale reference");
+        await saveCosts(env.DB, f.channel, f.order_id, f.line_item_id, { postageCents: amt(f.postage), repairsCents: amt(f.repairs), otherCents: amt(f.other) });
+        await rebuildRecent(env.DB);
+        return redirect(withMsg(back, "Costs saved; ledger recalculated"));
+      } catch (e) {
+        return redirect(withMsg(back, `Not saved: ${(e as Error).message}`));
+      }
     }
 
     if (req.method === "POST" && path === "/admin/clear-payouts") {
