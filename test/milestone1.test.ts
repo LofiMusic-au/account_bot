@@ -172,10 +172,10 @@ describe("eBay International Shipping", () => {
     expect(lines.find((l) => l.kind === "item")!.ruleId).toBe("R5");
   });
 
-  it("the draft GST scenario C2 is still held for the accountant, separately", async () => {
+  it("the GST scenario C2 is GST-free too (confirmed rule)", async () => {
     const { buildReport } = await import("../src/reconcile");
     const r = buildReport(eis(), resolve());
-    expect(r.sales.find((l) => l.sku === "L-NZ-1")).toMatchObject({ scenario: "C2", approval: "review" });
+    expect(r.sales.find((l) => l.sku === "L-NZ-1")).toMatchObject({ scenario: "C2", gstCents: 0 });
   });
 });
 

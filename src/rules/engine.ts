@@ -70,6 +70,9 @@ const issue = (
   extra: Partial<Issue> = {},
 ): Issue => ({ code, severity, message, orderId: order.orderId, lineId: line.lineId, sku: line.sku, ...extra });
 
+/** Facts only needed for deliberately deferred work (Division 66, trade-ins). */
+const DEFERRED_CODES = new Set<IssueCode>(["unknown_acquisition_source", "unknown_condition", "unknown_purchase_price"]);
+
 function review(
   order: OrderSale,
   line: SaleLine,
@@ -77,8 +80,10 @@ function review(
   reason: string,
   why: string[],
   flags: string[] = [],
-  extra: Partial<Issue> = {},
+  extra: Partial<Issue> & { deferred?: boolean } = {},
 ): LineClassification {
+  const { deferred, ...issueExtra } = extra;
+  const severity: Issue["severity"] = deferred || DEFERRED_CODES.has(code) ? "deferred" : "blocking";
   return {
     ...base(order, line),
     scenario: "REVIEW",
@@ -90,7 +95,7 @@ function review(
     notionalItcCents: 0,
     division66Candidate: false,
     flags,
-    issues: [issue(order, line, code, "blocking", reason, extra)],
+    issues: [issue(order, line, code, severity, reason, issueExtra)],
   };
 }
 
@@ -101,6 +106,8 @@ interface ResultExtra {
   issues?: Issue[];
   /** A scenario whose treatment is still undecided: block until a person looks. */
   unresolved?: string;
+  /** The undecided treatment belongs to deliberately deferred work: keep, don't block. */
+  deferred?: boolean;
 }
 
 function result(
@@ -119,11 +126,12 @@ function result(
     const msg = `${scenario} (${def.name}) is a draft until the accountant signs it off${def.pending ? `: ${def.pending}` : ""}`;
     issues.push(issue(order, line, "unsigned_scenario", "signoff", msg, { sku: null, lineId: null, orderId: null }));
   }
-  if (extra.unresolved) issues.push(issue(order, line, "unresolved_scenario", "blocking", extra.unresolved));
+  if (extra.unresolved) issues.push(issue(order, line, "unresolved_scenario", extra.deferred ? "deferred" : "blocking", extra.unresolved));
   if (order.buyerCurrency && order.buyerCurrency !== "AUD") {
-    const msg = `Buyer paid in ${order.buyerCurrency}: GST uses the platform's AUD amount until LOFI's conversion-rate policy (C4) is approved`;
-    flags.push(msg);
-    issues.push(issue(order, line, "fx_policy_pending", "signoff", msg));
+    // FX rule (locked): the marketplace's AUD amount and rate are used as recorded.
+    flags.push(
+      `Buyer paid in ${order.buyerCurrency}${order.fx ? ` ${order.fx.foreignAmount}` : ""}: accounted at the marketplace's AUD amount${order.fx?.rate ? ` (rate ${order.fx.rate})` : ""}`,
+    );
   }
   const gstCents = postings.reduce((a, p) => a + p.gstCents, 0);
   const conclusion = extra.unresolved
@@ -217,7 +225,7 @@ export function div66Credit(item: StockItem, saleGstCents: number, flags: string
 
 type Pick =
   | { scenario: Exclude<ScenarioCode, "REVIEW">; why: string[] }
-  | { scenario: "REVIEW"; why: string[]; code: IssueCode; reason: string; extra?: Partial<Issue> };
+  | { scenario: "REVIEW"; why: string[]; code: IssueCode; reason: string; extra?: Partial<Issue> & { deferred?: boolean } };
 
 /** Facts -> scenario, recording each fact used. */
 export function pickScenario(order: OrderSale, item: StockItem): Pick {
@@ -267,12 +275,8 @@ export function pickScenario(order: OrderSale, item: StockItem): Pick {
       const c = item.consignor!;
       const gst = consignorGstFacts(c, why);
       if (gst) return gst;
-      if (c.australianGstRegistered) {
-        const agreement = consignorAgreementFacts(c, why);
-        if (agreement) return agreement;
-      } else {
-        why.push(`agreement = ${c.agreementType ?? "not recorded (not needed for a non-registered consignor)"}`);
-      }
+      if (c.australianGstRegistered) return registeredConsignor(c, why);
+      why.push(`agreement = ${c.agreementType ?? "not recorded (not needed for a non-registered consignor)"}`);
       return { scenario: "C3", why };
     }
     if (item.acquiredFrom) why.push(`source_type = ${SOURCE_LABEL[item.acquiredFrom]}`);
@@ -298,7 +302,8 @@ export function pickScenario(order: OrderSale, item: StockItem): Pick {
           scenario: "REVIEW",
           why,
           code: "manual_review",
-          reason: "Acquired from 'other': no scenario covers this, a person must classify it",
+          reason: "Acquired from 'other': no draft GST scenario covers this (deferred with Division 66)",
+          extra: { deferred: true },
         };
       case "private_seller":
       case "trade_in": {
@@ -318,7 +323,8 @@ export function pickScenario(order: OrderSale, item: StockItem): Pick {
           scenario: "REVIEW",
           why,
           code: "manual_review",
-          reason: "New goods bought from a private seller: no draft scenario covers this",
+          reason: "New goods bought from a private seller: no draft GST scenario covers this (deferred with Division 66)",
+          extra: { deferred: true },
         };
       }
     }
@@ -334,9 +340,22 @@ export function pickScenario(order: OrderSale, item: StockItem): Pick {
     why.push(`agreement = ${c.agreementType ?? "not recorded (not needed for a non-registered consignor)"}`);
     return { scenario: "B1", why };
   }
-  const agreement = consignorAgreementFacts(c, why);
-  if (agreement) return agreement;
-  return { scenario: c.agreementType === "153B" ? "B2_153B" : "B2_AGENCY", why };
+  return registeredConsignor(c, why);
+}
+
+/**
+ * Locked rule: LOFI has no real history with GST-registered consignors, so
+ * every sale for one goes to manual review. No 153-B or agency pathway is
+ * automated (the B2 scenarios stay in the table for reference only).
+ */
+function registeredConsignor(c: Consignor, why: string[]): Pick {
+  return {
+    scenario: "REVIEW",
+    why: [...why, "australian_gst_registered = yes"],
+    code: "registered_consignor",
+    reason: `Consignor ${c.name} is registered for Australian GST: manual review`,
+    extra: { consignorId: c.id },
+  };
 }
 
 /** Australian GST registration of a consignor: unknown -> review. */
@@ -433,7 +452,7 @@ export function classifyLine(order: OrderSale, line: SaleLine, item: StockItem |
       if (candidate) {
         const c = div66Credit(item, sale.gstCents, flags);
         if (c === null) {
-          issues.push(issue(order, line, "unknown_purchase_price", "blocking", "Purchase price missing: Division 66 credit can't be worked out"));
+          issues.push(issue(order, line, "unknown_purchase_price", "deferred", "Purchase price missing: Division 66 credit can't be worked out (deferred)"));
         } else itc = c;
       }
       const why2 = scenario === "A2" ? "Second-hand from a private seller: normal taxable sale" : "Trade-in item resold: normal taxable sale";
@@ -444,8 +463,9 @@ export function classifyLine(order: OrderSale, line: SaleLine, item: StockItem |
         issues,
         unresolved:
           scenario === "A3" && TRADE_IN_TREATMENT === "UNRESOLVED"
-            ? "Trade-in treatment (A3) awaits the accountant: split and documents"
+            ? "Trade-in treatment (A3) is deferred: split and documents"
             : undefined,
+        deferred: scenario === "A3",
       });
     }
 

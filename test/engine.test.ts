@@ -50,7 +50,7 @@ const consigned = (c: Partial<Consignor> = {}, over: Partial<StockItem> = {}): S
   consignor: consignor(c),
   ...over,
 });
-const codes = (r: LineClassification, severity?: "blocking" | "signoff") =>
+const codes = (r: LineClassification, severity?: "blocking" | "signoff" | "deferred") =>
   r.issues.filter((i) => !severity || i.severity === severity).map((i) => i.code);
 
 /** An unsigned-off scenario must be draft, carry a sign-off issue, and never claim approval. */
@@ -149,18 +149,20 @@ describe("A: stock LOFI owns", () => {
     expect(r.flags.join()).toMatch(/purchase period/);
   });
 
-  it("A2: missing purchase price blocks the payout", () => {
+  it("A2: missing purchase price is deferred (Division 66), never blocking", () => {
     const o = order();
     const r = classifyLine(o, line(o), secondhand());
-    expect(codes(r, "blocking")).toEqual(["unknown_purchase_price"]);
+    expect(codes(r, "blocking")).toEqual([]);
+    expect(codes(r, "deferred")).toEqual(["unknown_purchase_price"]);
   });
 
-  it("A3: trade-in is held for review until the accountant decides", () => {
+  it("A3: trade-in is deferred: kept for later, never blocking", () => {
     const o = order();
     const r = classifyLine(o, line(o), owned({ acquiredFrom: "trade_in", condition: "secondhand", purchaseCents: 70000 }));
     expect(r.scenario).toBe("A3");
     expect(r.approval).toBe("review");
-    expect(codes(r, "blocking")).toContain("unresolved_scenario");
+    expect(codes(r, "blocking")).toEqual([]);
+    expect(codes(r, "deferred")).toContain("unresolved_scenario");
     // the draft figures are still shown for comparison
     expect(r.gstCents).toBe(10000);
     expect(r.division66Candidate).toBe(true);
@@ -180,10 +182,10 @@ describe("Division 66 is derived from facts, never tagged", () => {
 
 describe("missing facts go to review, never to a guess", () => {
   const o = order();
-  it("unknown acquisition source", () => {
+  it("unknown acquisition source (deferred: Division 66 only)", () => {
     const r = classifyLine(o, line(o), owned({ acquiredFrom: null }));
     expect(r.scenario).toBe("REVIEW");
-    expect(codes(r)).toEqual(["unknown_acquisition_source"]);
+    expect(codes(r, "deferred")).toEqual(["unknown_acquisition_source"]);
     expect(r.explanation).toContain("source_type = unknown");
   });
   it("acquired from 'other'", () => {
@@ -239,18 +241,10 @@ describe("B: consignment (all unsigned-off)", () => {
     expect(r.explanation).toContain("agreement = not recorded (not needed for a non-registered consignor)");
   });
 
-  it("GST-registered consignor with no recorded agreement -> review, never agency by default", () => {
-    const o = order();
-    const r = classifyLine(o, line(o), consigned({ australianGstRegistered: true, agreementType: null }));
-    expect(r.scenario).toBe("REVIEW");
-    expect(r.issues[0]).toMatchObject({ code: "unknown_consignor_agreement", severity: "blocking", consignorId: 1 });
-    expect(r.explanation).toContain("agreement = unknown");
-  });
-
-  it("an exported consigned item from a registered consignor also needs the agreement", () => {
+  it("an exported consigned item from a registered consignor also goes to manual review", () => {
     const us = order({ destinationCountry: "US", shippingProgram: "direct_export" });
-    const r = classifyLine(us, line(us), consigned({ australianGstRegistered: true, agreementType: null }));
-    expect(r.issues.map((i) => i.code)).toEqual(["unknown_consignor_agreement"]);
+    const r = classifyLine(us, line(us), consigned({ australianGstRegistered: true, agreementType: "agency" }));
+    expect(r.issues.map((i) => i.code)).toEqual(["registered_consignor"]);
   });
 
   it("153-B recorded for a non-registered consignor stays B1 and is flagged for the accountant", () => {
@@ -265,21 +259,13 @@ describe("B: consignment (all unsigned-off)", () => {
     ]);
   });
 
-  it("B2 agency: draft, consignor reports GST on the sale", () => {
+  it("a GST-registered consignor always goes to manual review, whatever the agreement (no 153-B pathway)", () => {
     const o = order();
-    const r = classifyLine(o, line(o), consigned({ australianGstRegistered: true, agreementType: "agency" }));
-    expect(r.scenario).toBe("B2_AGENCY");
-    expect(r.gstCents).toBe(2000);
-    expectProvisional(r);
-  });
-
-  it("B2 153-B: draft, LOFI reports GST on the full sale and records a bill", () => {
-    const o = order();
-    const r = classifyLine(o, line(o), consigned({ australianGstRegistered: true, agreementType: "153B" }));
-    expect(r.scenario).toBe("B2_153B");
-    expect(r.gstCents).toBe(10000);
-    expect(r.flags.join()).toMatch(/\$880\.00/);
-    expectProvisional(r);
+    for (const agreementType of ["agency", "153B", null] as const) {
+      const r = classifyLine(o, line(o), consigned({ australianGstRegistered: true, agreementType }));
+      expect(r.scenario).toBe("REVIEW");
+      expect(r.issues[0]).toMatchObject({ code: "registered_consignor", severity: "blocking", consignorId: 1 });
+    }
   });
 
   it("item commission overrides the consignor's default", () => {
@@ -301,13 +287,13 @@ describe("C: overseas", () => {
   it("C1 doesn't need the acquisition source", () => {
     expect(classifyLine(us, line(us), owned({ acquiredFrom: null })).scenario).toBe("C1");
   });
-  it("C2: eBay International Shipping goes to review until decided", () => {
+  it("C2: eBay International Shipping is GST-free (confirmed rule)", () => {
     const de = order({ destinationCountry: "DE", shippingProgram: "ebay_international" });
     const r = classifyLine(de, line(de), owned());
     expect(r.scenario).toBe("C2");
-    expect(r.approval).toBe("review");
-    expect(r.postings).toEqual([]);
-    expect(codes(r, "blocking")).toContain("unresolved_scenario");
+    expect(r.gstCents).toBe(0);
+    expect(r.postings[0]!.taxCode).toBe("GST_FREE_EXPORT");
+    expect(codes(r, "blocking")).toEqual([]);
   });
   it("C3: consigned item exported: commission still taxable (draft)", () => {
     const r = classifyLine(us, line(us), consigned());
@@ -315,11 +301,11 @@ describe("C: overseas", () => {
     expect(r.gstCents).toBe(2000);
     expectProvisional(r);
   });
-  it("foreign-currency buyer is flagged (C4) and awaits sign-off", () => {
-    const o = order({ buyerCurrency: "USD" });
+  it("foreign-currency buyer: the marketplace's AUD amount and rate are used (locked FX rule)", () => {
+    const o = order({ buyerCurrency: "USD", fx: { currency: "USD", foreignAmount: "700.00", rate: "1.5714", audCents: 110000, source: "ebay_convertedFrom" } });
     const r = classifyLine(o, line(o), owned());
-    expect(r.flags.join()).toMatch(/C4/);
-    expect(codes(r, "signoff")).toContain("fx_policy_pending");
+    expect(r.flags.join()).toMatch(/Buyer paid in USD 700\.00: accounted at the marketplace's AUD amount \(rate 1\.5714\)/);
+    expect(codes(r)).not.toContain("fx_policy_pending");
   });
 });
 

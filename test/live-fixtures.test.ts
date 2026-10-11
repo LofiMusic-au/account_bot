@@ -86,7 +86,9 @@ describe("live eBay payout shapes", () => {
     const r = buildReport(p, () => null);
     expect(r.differenceCents).toBe(0);
     expect(r.breakdown.feesByCategory.marketplace).toBe(41023);
-    expect(r.issues.filter((i) => i.code === "fx_policy_pending").length).toBeGreaterThan(0);
+    // FX rule: eBay's own conversion is kept with the sale.
+    expect(eur.fx).toEqual({ currency: "EUR", foreignAmount: "33.83", rate: "1.56408", audCents: 5291, source: "ebay_convertedFrom" });
+    expect(r.issues.some((i) => i.code === "fx_policy_pending")).toBe(false);
   });
 
   it("tax eBay collected and remitted (live spelling ebayCollectedTaxAmount) is noted and kept out of the gross", () => {

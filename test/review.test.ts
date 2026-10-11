@@ -80,21 +80,21 @@ describe("review queue end to end (through the Worker)", () => {
   it("one form save records facts, makes a payout ready and says so", async () => {
     const { d1, sqlite } = makeTestD1();
     seedFixtureFacts(sqlite);
-    sqlite.prepare("DELETE FROM stock_items WHERE sku = 'L-DISC-1'").run();
+    sqlite.prepare("DELETE FROM stock_items WHERE sku = '240/100_Stepdown'").run();
     await ingestAndReport(d1, shopifyFixture());
 
     const page = await (await worker.fetch(new Request("http://local/review"), env(d1))).text();
     expect(page).toContain("Facts to record");
-    expect(page).toContain("L-DISC-1");
+    expect(page).toContain("240/100_Stepdown");
     expect(page).toContain("Fixing this makes 1 payout ready");
-    expect(page).toMatch(/Make a rule for SKUs starting with <input name="prefix" value="L-"/);
+    expect(page).toMatch(/Make a rule for SKUs starting with <input name="prefix" value="240\/"/);
 
     const res = await worker.fetch(
-      post("/facts/item", { sku: "L-DISC-1", title: "Digitakt", ownership: "owned", acquired_from: "registered_supplier", item_condition: "new", return: "/review" }),
+      post("/facts/item", { sku: "240/100_Stepdown", title: "Stepdown", ownership: "owned", acquired_from: "registered_supplier", item_condition: "new", return: "/review" }),
       env(d1),
     );
     expect(res.status).toBe(303);
-    expect(msgOf(res)).toMatch(/Saved L-DISC-1\. Now ready \(provisional\): Shopify 2026-10-08 \(9001\)\. 0 payout\(s\) still need review\./);
+    expect(msgOf(res)).toMatch(/Saved 240\/100_Stepdown\. Now ready \(provisional\): Shopify 2026-10-08 \(9001\)\. 0 payout\(s\) still need review\./);
   });
 
   it("the form can also create a prefix rule, and errors come back as a message", async () => {

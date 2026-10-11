@@ -3,7 +3,7 @@
 // When the accountant approves one, flip it to true (and record who/when).
 // Nothing is ever posted to QuickBooks from a scenario that isn't signed off.
 
-import type { ScenarioCode, TaxCode } from "../types";
+import type { FeeTaxCode, ScenarioCode, TaxCode } from "../types";
 
 export interface ScenarioDef {
   code: ScenarioCode;
@@ -68,16 +68,15 @@ export const SCENARIOS: Record<ScenarioCode, ScenarioDef> = {
 };
 
 /**
- * C2 is unresolved: until the accountant decides, eBay International Shipping
- * sales go to the review queue instead of being given a treatment.
- * Set to "GST_FREE_EXPORT" or "GST" once decided.
+ * C2: eBay International Shipping sales are overseas, GST-free. Confirmed as
+ * LOFI's accounting rule (Milestone 2 brief, Oct 2026).
  */
-export const EBAY_INTERNATIONAL_SHIPPING_TREATMENT: TaxCode | "UNRESOLVED" = "UNRESOLVED";
+export const EBAY_INTERNATIONAL_SHIPPING_TREATMENT: TaxCode | "UNRESOLVED" = "GST_FREE_EXPORT";
 
 /**
- * A3 is unresolved: the trade-in split and documents aren't confirmed, so
- * trade-in sales go to the review queue. Set to "RESOLVED" once the
- * accountant approves the A3 treatment encoded in the engine.
+ * A3 (trade-ins) is deliberately deferred. Trade-in sales are marked
+ * "deferred" (kept, never blocking) rather than resolved. Set to "RESOLVED"
+ * once a trade-in workflow is approved.
  */
 export const TRADE_IN_TREATMENT: "RESOLVED" | "UNRESOLVED" = "UNRESOLVED";
 
@@ -100,19 +99,26 @@ export const ACCOUNTS = {
 } as const;
 
 /**
- * D1: GST treatment of each fee type. PENDING until the accountant confirms
- * which fees carry claimable GST. Unknown fee types are treated as PENDING.
+ * D1 (locked rule, Oct 2026): GST on platform/merchant fees.
+ *   eBay, PayPal               -> GST free purchases (0%)
+ *   Shopify, Afterpay, ZIP     -> GST on purchases (10%)
+ * Configured per fee type. A fee type not listed here blocks the payout
+ * until it is added; nothing is inferred.
  */
-export const FEE_TAX: Record<string, TaxCode> = {
-  ebay_final_value_fee: "PENDING",
-  ebay_final_value_fee_fixed_per_order: "PENDING",
-  ebay_promoted_listing_fee: "PENDING",
-  ebay_international_fee: "PENDING",
-  ebay_shipping_label: "PENDING",
-  ebay_other_fee: "PENDING",
-  shopify_payments_fee: "PENDING",
-  shopify_shipping_label: "PENDING",
-  shopify_chargeback_fee: "PENDING",
+export const FEE_TAX: Record<string, FeeTaxCode> = {
+  ebay_final_value_fee: "GST_FREE_PURCHASES",
+  ebay_final_value_fee_fixed_per_order: "GST_FREE_PURCHASES",
+  ebay_promoted_listing_fee: "GST_FREE_PURCHASES",
+  ebay_international_fee: "GST_FREE_PURCHASES",
+  ebay_shipping_label: "GST_FREE_PURCHASES",
+  ebay_other_fee: "GST_FREE_PURCHASES",
+  shopify_payments_fee: "GST_ON_PURCHASES",
+  shopify_shipping_label: "GST_ON_PURCHASES",
+  shopify_chargeback_fee: "GST_ON_PURCHASES",
+  // Channels not ingested yet; the rule is fixed for when they are.
+  paypal_fee: "GST_FREE_PURCHASES",
+  afterpay_fee: "GST_ON_PURCHASES",
+  zip_fee: "GST_ON_PURCHASES",
 };
 
 /**

@@ -5,7 +5,7 @@
 // Note: only Shopify Payments payouts come through here. Orders paid with
 // Afterpay or PayPal settle through those providers instead.
 
-import { toCents } from "../money";
+import { allocate, toCents } from "../money";
 import { rescaleOrder } from "../rules/engine";
 import type { Adjustment, Fee, FeeCategory, Issue, NormalisedPayout, OrderSale, RawTransaction, Refund, SourceRef } from "../types";
 
@@ -51,6 +51,12 @@ export interface ShopifyBalanceTxn {
   associatedOrder: { id: string; name: string } | null;
 }
 
+export interface ShopifyDiscountAllocation {
+  allocatedAmountSet: { shopMoney: { amount: string } };
+  /** Present from 2026-10 queries; older fixtures may lack it (treated as line-level). */
+  discountApplication?: { allocationMethod: string; targetSelection: string; targetType: string } | null;
+}
+
 export interface ShopifyOrder {
   id: string;
   name: string;
@@ -60,7 +66,17 @@ export interface ShopifyOrder {
   taxesIncluded: boolean;
   shippingAddress: { countryCodeV2: string | null } | null;
   totalShippingPriceSet: { shopMoney: { amount: string } };
-  totalPriceSet: { shopMoney: { amount: string } };
+  totalPriceSet: { shopMoney: { amount: string }; presentmentMoney?: { amount: string; currencyCode: string } };
+  transactions?: {
+    kind: string;
+    status: string;
+    gateway: string | null;
+    amountSet: { shopMoney: { amount: string; currencyCode: string }; presentmentMoney: { amount: string; currencyCode: string } };
+    settlementCurrency: string | null;
+    settlementCurrencyRate: string | null;
+  }[];
+  /** Delivery methods from fulfillment orders (separate, optional query: needs a fulfillment-orders scope). */
+  deliveryMethods?: string[] | null;
   lineItems: {
     nodes: {
       id: string;
@@ -68,11 +84,22 @@ export interface ShopifyOrder {
       name: string;
       quantity: number;
       originalTotalSet: { shopMoney: { amount: string } };
-      discountAllocations: { allocatedAmountSet: { shopMoney: { amount: string } } }[];
+      discountAllocations: ShopifyDiscountAllocation[];
       taxLines: { priceSet: { shopMoney: { amount: string } } }[];
     }[];
   };
 }
+
+// Local pickup is identified from fulfillment orders (Shopify: "don't infer the
+// delivery method from shipping lines or the presence of a shipping address").
+// Separate query because it needs a fulfillment-orders scope
+// (e.g. read_merchant_managed_fulfillment_orders); without it, pickup orders
+// fall back to the review queue's destination question.
+const DELIVERY_QUERY = `query Delivery($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on Order { id fulfillmentOrders(first: 10) { nodes { deliveryMethod { methodType } } } }
+  }
+}`;
 
 const PAYOUTS_QUERY = `query Payouts($q: String!, $after: String) {
   shopifyPaymentsAccount {
@@ -104,12 +131,20 @@ const ORDERS_QUERY = `query Orders($ids: [ID!]!) {
       id name createdAt presentmentCurrencyCode paymentGatewayNames taxesIncluded
       shippingAddress { countryCodeV2 }
       totalShippingPriceSet { shopMoney { amount } }
-      totalPriceSet { shopMoney { amount } }
+      totalPriceSet { shopMoney { amount } presentmentMoney { amount currencyCode } }
+      transactions(first: 10) {
+        kind status gateway
+        amountSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+        settlementCurrency settlementCurrencyRate
+      }
       lineItems(first: 100) {
         nodes {
           id sku name quantity
           originalTotalSet { shopMoney { amount } }
-          discountAllocations { allocatedAmountSet { shopMoney { amount } } }
+          discountAllocations {
+            allocatedAmountSet { shopMoney { amount } }
+            discountApplication { allocationMethod targetSelection targetType }
+          }
           taxLines { priceSet { shopMoney { amount } } }
         }
       }
@@ -198,11 +233,28 @@ export class ShopifyClient {
     return out;
   }
 
+  /** Set when the delivery-method query was refused (missing scope); pickup can't be detected. */
+  deliveryMethodsUnavailable: string | null = null;
+
   async orders(ids: string[]): Promise<Map<string, ShopifyOrder>> {
     const map = new Map<string, ShopifyOrder>();
     for (let i = 0; i < ids.length; i += 50) {
       const data = await this.gql<{ nodes: (ShopifyOrder | null)[] }>(ORDERS_QUERY, { ids: ids.slice(i, i + 50) });
       for (const o of data.nodes) if (o) map.set(o.id, o);
+    }
+    if (!this.deliveryMethodsUnavailable) {
+      try {
+        for (let i = 0; i < ids.length; i += 50) {
+          type R = { nodes: ({ id: string; fulfillmentOrders: { nodes: { deliveryMethod: { methodType: string } | null }[] } } | null)[] };
+          const data = await this.gql<R>(DELIVERY_QUERY, { ids: ids.slice(i, i + 50) });
+          for (const n of data.nodes) {
+            const o = n ? map.get(n.id) : undefined;
+            if (o && n) o.deliveryMethods = n.fulfillmentOrders.nodes.map((f) => f.deliveryMethod?.methodType ?? "NONE");
+          }
+        }
+      } catch (e) {
+        this.deliveryMethodsUnavailable = (e as Error).message.split(";")[0]!.slice(0, 200);
+      }
     }
     return map;
   }
@@ -279,11 +331,31 @@ function ref(p: ShopifyPayout, t: ShopifyBalanceTxn | null, extra: Partial<Sourc
   };
 }
 
-/** Shopify order -> channel-neutral order (full amounts, as sold). */
+/** An order-level discount (applies across all items), as opposed to one on a particular line. */
+const isOrderLevel = (d: ShopifyDiscountAllocation) =>
+  d.discountApplication?.targetType === "LINE_ITEM" &&
+  d.discountApplication.targetSelection === "ALL" &&
+  d.discountApplication.allocationMethod === "ACROSS";
+
+/**
+ * Shopify order -> channel-neutral order (full amounts, as sold).
+ *
+ * Discounts (locked rule): an order-level discount is split EVENLY across the
+ * order's item lines, not in proportion to price (Shopify allocates it
+ * proportionally; that allocation is replaced). Line-level discounts stay on
+ * their line. Local pickup (fulfillment order PICK_UP) is a domestic sale.
+ */
 export function shopifyOrderToSale(o: ShopifyOrder, warnings: string[], sources: SourceRef[] = []): OrderSale {
-  const lines = o.lineItems.nodes.map((li) => {
+  const nodes = o.lineItems.nodes;
+  const orderLevel = nodes.reduce(
+    (a, li) => a + li.discountAllocations.filter(isOrderLevel).reduce((b, d) => b + toCents(d.allocatedAmountSet.shopMoney.amount), 0),
+    0,
+  );
+  const evenShares = allocate(orderLevel, nodes.map(() => 1));
+  const lines = nodes.map((li, i) => {
     const original = toCents(li.originalTotalSet.shopMoney.amount);
-    const discounts = li.discountAllocations.reduce((a, d) => a + toCents(d.allocatedAmountSet.shopMoney.amount), 0);
+    const lineLevel = li.discountAllocations.filter((d) => !isOrderLevel(d)).reduce((a, d) => a + toCents(d.allocatedAmountSet.shopMoney.amount), 0);
+    const discounts = lineLevel + (evenShares[i] ?? 0);
     const tax = o.taxesIncluded ? 0 : li.taxLines.reduce((a, t) => a + toCents(t.priceSet.shopMoney.amount), 0);
     return {
       lineId: li.id,
@@ -295,20 +367,37 @@ export function shopifyOrderToSale(o: ShopifyOrder, warnings: string[], sources:
       discountCents: discounts,
     };
   });
+  if (orderLevel) warnings.push(`${o.name}: order-level discount ${(orderLevel / 100).toFixed(2)} split evenly across ${nodes.length} item(s)`);
   const shippingCents = toCents(o.totalShippingPriceSet.shopMoney.amount);
   const grossCents = lines.reduce((a, l) => a + l.grossCents, 0) + shippingCents;
   const total = toCents(o.totalPriceSet.shopMoney.amount);
   if (total !== grossCents) {
     warnings.push(`${o.name}: lines + shipping = ${grossCents} cents but Shopify total is ${total} cents`);
   }
-  const dest = o.shippingAddress?.countryCodeV2?.toUpperCase() ?? null;
+  const pickup = !!o.deliveryMethods?.length && o.deliveryMethods.every((m) => m === "PICK_UP");
+  const addr = o.shippingAddress?.countryCodeV2?.toUpperCase() ?? null;
+  const dest = addr ?? (pickup ? "AU" : null);
+  const presentment = o.totalPriceSet.presentmentMoney;
+  const settled = o.transactions?.find((t) => t.status === "SUCCESS" && (t.kind === "SALE" || t.kind === "CAPTURE"));
+  const fx =
+    presentment && presentment.currencyCode !== "AUD"
+      ? {
+          currency: presentment.currencyCode,
+          foreignAmount: presentment.amount,
+          rate: settled?.settlementCurrencyRate ?? null,
+          audCents: total,
+          source: "shopify_presentment_settlement" as const,
+        }
+      : null;
   return {
     orderId: o.id,
     orderName: o.name,
     orderDate: o.createdAt,
     destinationCountry: dest,
+    deliveryMethod: pickup && !addr ? "pickup" : "shipping",
     shippingProgram: dest === null ? "unknown" : dest !== "AU" ? "direct_export" : "domestic",
     buyerCurrency: o.presentmentCurrencyCode !== "AUD" ? o.presentmentCurrencyCode : null,
+    fx,
     grossCents,
     lines,
     shippingCents,
@@ -457,7 +546,9 @@ export function normaliseShopifyPayout(
         orderDate: charge.date,
         destinationCountry: null,
         shippingProgram: "unknown",
+        deliveryMethod: "shipping",
         buyerCurrency: null,
+        fx: null,
         grossCents: charge.cents,
         lines: [
           { lineId: `${orderId}:unknown`, sku: null, title: "Order details unavailable", quantity: 1, grossCents: charge.cents, discountCents: 0, placeholder: true },

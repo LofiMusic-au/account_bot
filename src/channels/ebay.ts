@@ -11,7 +11,7 @@
 
 import { convertAtRate, fmt, toCents } from "../money";
 import { rescaleOrder } from "../rules/engine";
-import type { Adjustment, Fee, FeeCategory, Issue, NormalisedPayout, OrderSale, RawTransaction, Refund, SourceRef } from "../types";
+import type { Adjustment, Fee, FeeCategory, FxRecord, Issue, NormalisedPayout, OrderSale, RawTransaction, Refund, SourceRef } from "../types";
 
 export interface EbayConfig {
   clientId: string;
@@ -88,6 +88,8 @@ export interface EbayOrder {
     deliveryCost?: { shippingCost?: Amount };
   }[];
   fulfillmentStartInstructions?: {
+    /** SHIP_TO | PREPARE_FOR_PICKUP | DIGITAL | SELLER_DEFINED (eBay FulfillmentInstructionsType). */
+    fulfillmentInstructionsType?: string;
     ebaySupportedFulfillment?: boolean;
     finalDestinationAddress?: { countryCode?: string };
     shippingStep?: { shipTo?: { contactAddress?: { countryCode?: string } } };
@@ -256,6 +258,7 @@ export function ebayOrderForAudit(o: EbayOrder): EbayOrder {
       deliveryCost: li.deliveryCost,
     })),
     fulfillmentStartInstructions: o.fulfillmentStartInstructions?.map((f) => ({
+      fulfillmentInstructionsType: f.fulfillmentInstructionsType,
       ebaySupportedFulfillment: f.ebaySupportedFulfillment,
       finalDestinationAddress: f.finalDestinationAddress?.countryCode ? { countryCode: f.finalDestinationAddress.countryCode } : undefined,
       shippingStep: f.shippingStep?.shipTo?.contactAddress?.countryCode
@@ -290,7 +293,10 @@ export function ebayOrderToSale(o: EbayOrder, warnings: string[], sources: Sourc
   const fsi = o.fulfillmentStartInstructions?.[0];
   const destRaw =
     fsi?.finalDestinationAddress?.countryCode ?? fsi?.shippingStep?.shipTo?.contactAddress?.countryCode ?? null;
-  const dest = destRaw ? destRaw.toUpperCase() : null;
+  // Local pickup (locked rule: a normal domestic sale). eBay marks it with a
+  // PREPARE_FOR_PICKUP fulfilment instruction and no ship-to address.
+  const pickup = !destRaw && fsi?.fulfillmentInstructionsType === "PREPARE_FOR_PICKUP";
+  const dest = destRaw ? destRaw.toUpperCase() : pickup ? "AU" : null;
   const eis = !!o.program?.ebayInternationalShipping || (fsi?.ebaySupportedFulfillment === true && dest !== null && dest !== "AU");
   const buyerCurrency = o.lineItems[0]?.lineItemCost.convertedFromCurrency ?? null;
   const currencies = new Set(o.lineItems.flatMap((li) => [li.lineItemCost.currency, li.deliveryCost?.shippingCost?.currency].filter(Boolean)));
@@ -300,8 +306,10 @@ export function ebayOrderToSale(o: EbayOrder, warnings: string[], sources: Sourc
     orderName: o.salesRecordReference ? `eBay ${o.orderId} (#${o.salesRecordReference})` : `eBay ${o.orderId}`,
     orderDate: o.creationDate,
     destinationCountry: dest,
+    deliveryMethod: pickup ? "pickup" : "shipping",
     shippingProgram: eis ? "ebay_international" : dest === null ? "unknown" : dest !== "AU" ? "direct_export" : "domestic",
     buyerCurrency: buyerCurrency && buyerCurrency !== "AUD" ? buyerCurrency : null,
+    fx: null,
     grossCents: lines.reduce((a, l) => a + l.grossCents, 0) + shippingCents,
     lines,
     shippingCents,
@@ -319,7 +327,7 @@ export function ebayOrderToSale(o: EbayOrder, warnings: string[], sources: Sourc
  * fee are in the buyer's currency. Each foreign fee is converted at eBay's own
  * exchangeRate for that transaction. eBay's AUD net stays authoritative
  * because it is what was paid out; gross = net + converted fees. This is a
- * working method until LOFI's FX policy (C4) is approved.
+ * locked FX rule (Oct 2026): the marketplace's own conversion is used as recorded.
  */
 function feesInAud(
   t: EbayTransaction,
@@ -352,6 +360,23 @@ function feesInAud(
   }
   const totalAud = lines.reduce((a, l) => a + l.aud, 0) + unitemisedAud;
   return { lines, totalAud, unitemisedAud, currency: txnCurrency, rate };
+}
+
+/**
+ * FX rule (locked): eBay's own conversion on the transaction. `value` (AUD)
+ * is the accounting amount; convertedFromValue / convertedFromCurrency /
+ * exchangeRate are kept as sent. Never re-converted with another rate.
+ */
+function fxRecord(t: EbayTransaction): FxRecord | null {
+  const a = t.amount;
+  if (!a.convertedFromCurrency || a.convertedFromCurrency === "AUD") return null;
+  return {
+    currency: a.convertedFromCurrency,
+    foreignAmount: a.convertedFromValue ?? "",
+    rate: a.exchangeRate ?? null,
+    audCents: toCents(a.value),
+    source: "ebay_convertedFrom",
+  };
 }
 
 /** Pure: eBay payout + transactions + orders -> NormalisedPayout. */
@@ -457,9 +482,7 @@ export function normaliseEbayPayout(
           }
         }
         if (fx.rate) {
-          const msg = `eBay sale ${t.transactionId}: buyer paid in ${fx.currency}; fees converted to AUD at eBay's rate ${fx.rate} (FX policy C4 pending)`;
-          warnings.push(msg);
-          issues.push({ code: "fx_policy_pending", severity: "signoff", message: msg, transactionId: t.transactionId, orderId });
+          warnings.push(`eBay sale ${t.transactionId}: buyer paid in ${fx.currency}; fees converted to AUD at eBay's own rate ${fx.rate} (FX rule)`);
         }
         const collectedTax = t.ebayCollectedTaxAmount ?? t.eBayCollectedTaxAmount;
         if (collectedTax && toCents(collectedTax.value) !== 0) {
@@ -485,7 +508,9 @@ export function normaliseEbayPayout(
             orderDate: t.transactionDate,
             destinationCountry: null,
             shippingProgram: "unknown",
+            deliveryMethod: "shipping",
             buyerCurrency: fx.rate ? fx.currency : null,
+            fx: fxRecord(t),
             grossCents: gross,
             lines: [
               { lineId: `${t.transactionId}:unknown`, sku: null, title: "Order details unavailable", quantity: 1, grossCents: gross, discountCents: 0, placeholder: true },
@@ -498,6 +523,7 @@ export function normaliseEbayPayout(
         }
         let sale = ebayOrderToSale(o, [], [src]);
         if (fx.rate && !sale.buyerCurrency) sale = { ...sale, buyerCurrency: fx.currency };
+        sale = { ...sale, fx: fxRecord(t) };
         // Live data: a foreign buyer's order (Fulfillment API) is priced in the
         // buyer's currency, matching the fee basis. Compare in that currency,
         // then split eBay's AUD gross across items and shipping in proportion.
@@ -571,9 +597,7 @@ export function normaliseEbayPayout(
           );
         }
         if (fx.rate) {
-          const msg = `eBay refund ${t.transactionId}: in ${fx.currency}; fee credits converted at eBay's rate ${fx.rate} (FX policy C4 pending)`;
-          warnings.push(msg);
-          issues.push({ code: "fx_policy_pending", severity: "signoff", message: msg, transactionId: t.transactionId, orderId });
+          warnings.push(`eBay refund ${t.transactionId}: in ${fx.currency}; fee credits converted at eBay's own rate ${fx.rate} (FX rule)`);
         }
         refunds.push({
           orderId: orderId ?? t.transactionId,

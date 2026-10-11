@@ -60,7 +60,7 @@ export interface SaleLine {
   quantity: number;
   /** AUD cents collected for this line, GST-inclusive, after all discounts. */
   grossCents: number;
-  /** AUD cents of discount already taken off grossCents (informational). */
+  /** AUD cents of discount already taken off grossCents (line-level discounts plus this line's even share of order-level ones). */
   discountCents: number;
   /** Stands in for an order whose details couldn't be fetched; the order-level issue explains it. */
   placeholder?: boolean;
@@ -80,6 +80,10 @@ export interface OrderSale {
   destinationSource?: "platform" | "staff";
   /** Staff couldn't say where the goods went and referred it for manual review. */
   destinationReferred?: boolean;
+  /** How the destination was established: "pickup" = the platform says the buyer collected in person (domestic). */
+  deliveryMethod?: "shipping" | "pickup";
+  /** Foreign-currency sale: the marketplace's own conversion, preserved for audit (FX rule). */
+  fx?: FxRecord | null;
   shippingProgram: ShippingProgram;
   /** Currency the buyer paid in, when not AUD (C4). */
   buyerCurrency: string | null;
@@ -92,6 +96,24 @@ export interface OrderSale {
   gateway: string;
   /** The platform transaction(s) that collected this money. */
   sources: SourceRef[];
+}
+
+/**
+ * FX rule (locked): when the marketplace converted a foreign-currency sale,
+ * its AUD amount is the accounting value, and the original amount, currency
+ * and rate are kept. No third-party rate is ever substituted.
+ */
+export interface FxRecord {
+  /** The buyer's currency. */
+  currency: string;
+  /** The amount in the buyer's currency, as the platform sent it. */
+  foreignAmount: string;
+  /** The platform's conversion rate, as sent. null if the platform didn't give one. */
+  rate: string | null;
+  /** The platform's AUD amount for the same thing (accounting value), cents. */
+  audCents: number;
+  /** Which platform fields these came from. */
+  source: "ebay_convertedFrom" | "shopify_presentment_settlement";
 }
 
 export interface Refund {
@@ -164,6 +186,7 @@ export type IssueCode =
   | "unknown_consignor"
   | "unknown_consignor_gst_status"
   | "unknown_consignor_agreement"
+  | "registered_consignor"
   | "unknown_commission"
   | "unknown_purchase_price"
   | "unknown_destination"
@@ -189,8 +212,10 @@ export type IssueCode =
  *           ready until a person deals with it.
  * signoff:  the accountant hasn't approved this treatment yet. The payout is
  *           provisional, but staff can't fix it themselves.
+ * deferred: a fact only needed for work LOFI has deliberately deferred
+ *           (Division 66, trade-ins). Kept for later, never blocks a payout.
  */
-export type IssueSeverity = "blocking" | "signoff";
+export type IssueSeverity = "blocking" | "signoff" | "deferred";
 
 export interface Issue {
   code: IssueCode;
@@ -266,6 +291,9 @@ export type ScenarioCode =
   | "REVIEW";
 
 export type TaxCode = "GST" | "GST_FREE_EXPORT" | "NO_GST" | "PENDING";
+
+/** Purchase-side GST on platform/merchant fees (locked rule). */
+export type FeeTaxCode = "GST_ON_PURCHASES" | "GST_FREE_PURCHASES";
 
 export interface PostingLine {
   account: string;

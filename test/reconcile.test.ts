@@ -74,7 +74,9 @@ describe("eBay fixture payout", () => {
     expect(codes(report.issues, "blocking")).toEqual([]);
     expect(report.status).toBe("ready");
     expect(report.provisional).toBe(true);
-    expect(codes(report.issues, "signoff")).toEqual(expect.arrayContaining(["unsigned_scenario", "unknown_fee_tax"]));
+    expect(codes(report.issues, "signoff")).toEqual(expect.arrayContaining(["unsigned_scenario"]));
+    expect(codes(report.issues)).not.toContain("unknown_fee_tax"); // every fee type is in the locked fee GST table
+    expect(report.fees.every((f) => f.taxCode === "GST_FREE_PURCHASES")).toBe(true);
   });
 
   it("surfaces an unknown transaction type instead of hiding it", () => {
@@ -113,14 +115,14 @@ describe("eBay fixture payout", () => {
     expect(codes(r.issues)).toContain("payout_mismatch");
   });
 
-  it("eBay International Shipping goes to review", () => {
+  it("eBay International Shipping is GST-free C2 (confirmed rule)", () => {
     const p = ebayFixture((f) => {
       f.orders[1]!.program = { ebayInternationalShipping: {} };
       f.orders[1]!.fulfillmentStartInstructions = [{ ebaySupportedFulfillment: true, finalDestinationAddress: { countryCode: "DE" } }];
     });
     const r = buildReport(p, resolve, now);
-    expect(r.sales.find((l) => l.sku === "L-NZ-1")).toMatchObject({ scenario: "C2", approval: "review" });
-    expect(r.status).toBe("needs_review");
+    expect(r.sales.find((l) => l.sku === "L-NZ-1")).toMatchObject({ scenario: "C2", gstCents: 0 });
+    expect(r.status).toBe("ready");
   });
 
   it("a dispute is known but always needs a person", () => {

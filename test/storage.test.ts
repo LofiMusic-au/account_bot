@@ -63,23 +63,29 @@ describe("idempotent re-import", () => {
 });
 
 describe("staff correct facts, not tax codes", () => {
-  it("an L- SKU with no record: owned by convention, so only the acquisition source is asked -> ready", async () => {
+  it("an L- SKU with no record: owned by convention; the missing source is deferred, so the payout is ready", async () => {
     const { d1, sqlite } = makeTestD1();
     seedFixtureFacts(sqlite);
     sqlite.prepare("DELETE FROM stock_items WHERE sku = 'L-DISC-1'").run();
-    let r = await ingestAndReport(d1, shopifyFixture());
-    // The "L-" convention sets ownership only; the GST scenario still needs the source.
-    expect(r.issues.filter((i) => i.severity === "blocking").map((i) => i.code)).toEqual(["unknown_acquisition_source"]);
+    const r = await ingestAndReport(d1, shopifyFixture());
+    expect(r.issues.filter((i) => i.severity === "blocking")).toEqual([]);
+    expect(r.issues.filter((i) => i.severity === "deferred").map((i) => i.code)).toEqual(["unknown_acquisition_source"]);
+    expect(r.status).toBe("ready");
     expect(r.sales.find((l) => l.sku === "L-DISC-1")!.explanation[0]).toBe('SKU convention "L-" = LOFI-owned (no individual record)');
+  });
 
-    await setStockFact(d1, "L-DISC-1", "ownership", "owned", "Elektron Digitakt");
-    r = (await rebuildStored(d1, "shopify", "9001"))!;
-    expect(r.issues.filter((i) => i.severity === "blocking").map((i) => i.code)).toEqual(["unknown_acquisition_source"]);
-
-    await setStockFact(d1, "L-DISC-1", "acquired_from", "registered_supplier");
+  it("unknown non-L SKU -> ownership -> ready", async () => {
+    const { d1, sqlite } = makeTestD1();
+    seedFixtureFacts(sqlite);
+    sqlite.prepare("DELETE FROM stock_items WHERE sku = '240/100_Stepdown'").run();
+    let r = await ingestAndReport(d1, shopifyFixture());
+    expect(r.issues.filter((i) => i.severity === "blocking").map((i) => i.code)).toEqual(["unknown_stock_record"]);
+    await setStockFact(d1, "240/100_Stepdown", "ownership", "owned", "Stepdown");
     r = (await rebuildStored(d1, "shopify", "9001"))!;
     expect(r.status).toBe("ready");
-    expect(r.sales.find((l) => l.sku === "L-DISC-1")!.scenario).toBe("A1");
+    await setStockFact(d1, "240/100_Stepdown", "acquired_from", "registered_supplier");
+    r = (await rebuildStored(d1, "shopify", "9001"))!;
+    expect(r.sales.find((l) => l.sku === "240/100_Stepdown")!.scenario).toBe("A1");
     expect((await getReport(d1, "shopify", "9001"))!.status).toBe("ready");
   });
 
@@ -171,18 +177,20 @@ describe("consignor facts", () => {
     expect(sqlite.prepare("SELECT australian_gst_registered FROM consignors WHERE id = ?").get(id)).toEqual({ australian_gst_registered: null });
   });
 
-  it("a GST-registered consignor with no agreement goes to review until the agreement is recorded", async () => {
+  it("a GST-registered consignor goes to manual review; correcting the fact to not registered resolves it", async () => {
     const { d1, sqlite } = makeTestD1();
     seedFixtureFacts(sqlite);
     await setConsignorGst(d1, 1, true);
     let r = await ingestAndReport(d1, shopifyFixture());
-    expect(r.issues.find((i) => i.code === "unknown_consignor_agreement")).toMatchObject({ consignorId: 1, severity: "blocking" });
+    expect(r.issues.find((i) => i.code === "registered_consignor")).toMatchObject({ consignorId: 1, severity: "blocking" });
     expect(r.status).toBe("needs_review");
-    await setConsignorAgreement(d1, 1, "agency");
+    await setConsignorAgreement(d1, 1, "agency"); // no agreement pathway is automated
     r = (await rebuildStored(d1, "shopify", "9001"))!;
-    expect(r.sales.find((x) => x.sku === "RM-256549-001196-140526")!.scenario).toBe("B2_AGENCY");
+    expect(r.status).toBe("needs_review");
+    await setConsignorGst(d1, 1, false);
+    r = (await rebuildStored(d1, "shopify", "9001"))!;
+    expect(r.sales.find((x) => x.sku === "RM-256549-001196-140526")!.scenario).toBe("B1");
     expect(r.status).toBe("ready");
-    expect(r.provisional).toBe(true);
   });
 });
 

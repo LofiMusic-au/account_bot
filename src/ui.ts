@@ -43,6 +43,7 @@ const ISSUE_LABEL: Record<string, string> = {
   unknown_fee_tax: "Fee GST treatment pending",
   unsigned_scenario: "Scenario not signed off",
   fx_policy_pending: "Foreign-currency policy pending",
+  registered_consignor: "GST-registered consignor (manual review)",
   payout_mismatch: "Payout doesn't match",
   unsupported_transaction_type: "Unsupported transaction type",
   dispute: "Dispute / chargeback",
@@ -306,7 +307,7 @@ ${t.byScenario.map((s) => `<tr><td><b>${esc(s.code)}</b> ${esc(s.name)}</td><td>
 <h2>Refunds</h2>${linesTable(r.refunds)}
 <h2>Fees</h2>
 ${r.fees.length ? `<div class="wrap"><table><tr><th>Category</th><th>Type</th><th>Description</th><th>GST treatment</th><th class="n">Amount</th><th>Source</th></tr>
-${r.fees.map((f) => `<tr><td>${esc(FEE_LABEL[f.category] ?? f.category)}</td><td>${esc(f.type)}</td><td>${esc(f.description)}</td><td>${f.taxCode === "PENDING" ? chip("draft", "pending") : esc(f.taxCode)}</td><td class="n">${fmt(f.cents)}</td><td class="small">${sourceIds([f.source])}</td></tr>`).join("")}</table></div>` : `<p class="muted">None.</p>`}
+${r.fees.map((f) => `<tr><td>${esc(FEE_LABEL[f.category] ?? f.category)}</td><td>${esc(f.type)}</td><td>${esc(f.description)}</td><td>${f.taxCode === null ? chip("review", "not in fee table") : f.taxCode === "GST_ON_PURCHASES" ? "GST on purchases (10%)" : "GST free purchases (0%)"}</td><td class="n">${fmt(f.cents)}</td><td class="small">${sourceIds([f.source])}</td></tr>`).join("")}</table></div>` : `<p class="muted">None.</p>`}
 <h2>Adjustments</h2>
 ${r.adjustments.length ? `<div class="wrap"><table><tr><th>Type</th><th>Description</th><th></th><th class="n">Amount</th><th>Source</th></tr>
 ${r.adjustments.map((a) => `<tr><td>${esc(a.type)}</td><td>${esc(a.description)}</td><td>${a.supported ? "" : chip("review", "unsupported")}</td><td class="n">${fmt(a.cents)}</td><td class="small">${sourceIds([a.source])}</td></tr>`).join("")}</table></div>` : `<p class="muted">None.</p>`}
@@ -543,7 +544,7 @@ const FACT_CODES = new Set([
   "unknown_purchase_price",
   "unknown_destination",
 ]);
-const ACCOUNTING_CODES = new Set(["unresolved_scenario", "manual_review", "dispute", "destination_referred"]);
+const ACCOUNTING_CODES = new Set(["unresolved_scenario", "manual_review", "dispute", "destination_referred", "registered_consignor"]);
 export const issueGroup = (i: Issue): IssueGroup =>
   FACT_CODES.has(i.code) ? "facts" : ACCOUNTING_CODES.has(i.code) ? "accounting" : "integration";
 /** SKU-level fact problems are fixed with one form per SKU. */

@@ -19,8 +19,8 @@ import type {
   Issue,
   LineClassification,
   NormalisedPayout,
+  FeeTaxCode,
   ScenarioCode,
-  TaxCode,
 } from "./types";
 
 export type ReportStatus = "ready" | "needs_review" | "unbalanced";
@@ -65,7 +65,7 @@ export interface PayoutReport {
   provisional: boolean;
   sales: LineClassification[];
   refunds: LineClassification[];
-  fees: (Fee & { taxCode: TaxCode })[];
+  fees: (Fee & { taxCode: FeeTaxCode | null })[];
   adjustments: Adjustment[];
   breakdown: PayoutBreakdown;
   totals: {
@@ -97,8 +97,9 @@ const issueKey = (i: Issue) =>
 export function dedupeIssues(issues: Issue[]): Issue[] {
   const seen = new Map<string, Issue>();
   for (const i of issues) if (!seen.has(issueKey(i))) seen.set(issueKey(i), i);
-  // Blocking first, then sign-off; stable within each.
-  return [...seen.values()].sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "blocking" ? -1 : 1));
+  // Blocking first, then sign-off, then deferred; stable within each.
+  const rank = { blocking: 0, signoff: 1, deferred: 2 } as const;
+  return [...seen.values()].sort((a, b) => rank[a.severity] - rank[b.severity]);
 }
 
 export function buildReport(payout: NormalisedPayout, resolve: StockResolver, now = new Date()): PayoutReport {
@@ -159,16 +160,9 @@ export function buildReport(payout: NormalisedPayout, resolve: StockResolver, no
     }));
   });
 
-  const fees = payout.fees.map((f) => ({ ...f, taxCode: FEE_TAX[f.type] ?? ("PENDING" as TaxCode) }));
-  for (const type of new Set(fees.filter((f) => f.taxCode === "PENDING").map((f) => f.type))) {
-    issues.push({
-      code: "unknown_fee_tax",
-      severity: "signoff",
-      message:
-        type in FEE_TAX
-          ? `Fee type ${type}: GST treatment awaiting the accountant (D1)`
-          : `Fee type ${type} isn't in the fee GST table (D1)`,
-    });
+  const fees = payout.fees.map((f) => ({ ...f, taxCode: FEE_TAX[f.type] ?? null }));
+  for (const type of new Set(fees.filter((f) => f.taxCode === null).map((f) => f.type))) {
+    issues.push({ code: "unknown_fee_tax", severity: "blocking", message: `Fee type ${type} isn't in the fee GST table: add it before this payout can be posted` });
   }
 
   const all = [...sales, ...refunds];
@@ -214,11 +208,11 @@ export function buildReport(payout: NormalisedPayout, resolve: StockResolver, no
 
   const deduped = dedupeIssues(issues);
   const blockingCount = deduped.filter((i) => i.severity === "blocking").length;
-  const signoffCount = deduped.length - blockingCount;
+  const signoffCount = deduped.filter((i) => i.severity === "signoff").length;
   const reviewCount = all.filter((l) => l.approval === "review").length;
-  const status: ReportStatus =
-    differenceCents !== 0 ? "unbalanced" : blockingCount > 0 || reviewCount > 0 ? "needs_review" : "ready";
-  const provisional = signoffCount > 0 || all.some((l) => l.approval !== "approved");
+  // Deferred facts (Division 66, trade-ins) never hold a payout up.
+  const status: ReportStatus = differenceCents !== 0 ? "unbalanced" : blockingCount > 0 ? "needs_review" : "ready";
+  const provisional = signoffCount > 0 || all.some((l) => l.approval === "draft");
 
   return {
     version: REPORT_VERSION,
