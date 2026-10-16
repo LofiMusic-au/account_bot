@@ -106,6 +106,19 @@ Logical keys only. QuickBooks IDs are set per company with `POST /api/qbo/map` (
 
 *Illustration: the item facts for this payout haven't been recorded yet, so its SKUs are assumed LOFI-owned here. The amounts, refund, fee credit and FX handling are as eBay sent them.*
 
+## Sandbox test (Intuit sandbox company only)
+
+```bash
+# .dev.vars: QBO_MODE=sandbox, QBO_REALM_ID, QBO_CLIENT_ID / QBO_CLIENT_SECRET (DEVELOPMENT keys)
+npm run qbo:connect                      # sign in, choose the sandbox company; tokens saved to .dev.vars + local D1
+npm run dev                              # restart so the Worker is in sandbox mode
+npm run qbo:sandbox -- discover          # company country, currency, accounts, tax codes and rates
+npm run qbo:sandbox -- map --create      # create/find sandbox accounts, match GST codes by rate, save IDs
+npm run qbo:sandbox -- prove ebay <payoutId>   # post via the real route, re-fetch and compare, duplicate + recovery tests
+```
+
+Raw requests and responses go to `.live/qbo-sandbox/` (git-ignored). Everything goes to `sandbox-quickbooks.api.intuit.com`, and the scripts refuse to run unless `QBO_MODE=sandbox`.
+
 ## Switching posting on (later, with explicit approval)
 
 1. **Create the clearing accounts in QuickBooks** and confirm the placeholder account names.

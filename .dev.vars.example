@@ -26,3 +26,10 @@ EBAY_REFRESH_TOKEN=
 
 # Local only: shows a "Clear all payouts" button. Leave unset in production.
 ALLOW_DATA_RESET=true
+
+# QuickBooks SANDBOX (development keys only; never production). See docs/milestone2-posting.md.
+# QBO_MODE=sandbox
+# QBO_REALM_ID=
+# QBO_CLIENT_ID=
+# QBO_CLIENT_SECRET=
+# QBO_REFRESH_TOKEN=   (filled in by `npm run qbo:connect`)

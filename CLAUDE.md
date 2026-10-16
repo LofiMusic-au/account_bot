@@ -6,7 +6,7 @@ Read `HANDOFF.md` first for the full project context, the decisions made and the
 
 - **No AI or heuristics in the tax path.** GST classification is deterministic code in `src/rules/`. Anything that doesn't match a rule goes to the review queue (`REVIEW`). Never guess a treatment.
 - **Never guess what a SKU prefix or consignor means.** Ask Luke.
-- **Nothing gets posted to QuickBooks from a scenario that isn't `signedOff: true`** in `src/rules/config.ts`. Payouts that aren't `ready` aren't posted either. Milestone 1 is report-only.
+- **Nothing reaches QuickBooks except through the Milestone 2 posting gate and a person's approval.** Posting uses LOFI's locked rules (the payout split and the account/tax map), not the draft GST scenarios. Production QuickBooks writes need the user's explicit instruction. Testing happens only against an Intuit **sandbox** company (`QBO_MODE=sandbox`, development keys, `npm run qbo:sandbox`).
 - **Money is integer cents** (`src/money.ts`). Use `allocate()` for any split so the parts always add up to the total.
 - **Payouts must reconcile to the cent.** A difference is surfaced as `unbalanced`, never absorbed.
 - Platform-specific logic belongs in `src/channels/*`. Everything after normalisation is channel-neutral.
